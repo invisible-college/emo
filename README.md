@@ -30,10 +30,10 @@ Known issues:
 
 
 To run the code:
-'''
+```
 npm install statebus-server --save
 supervisor emo.js
-'''
+```
 
 Then visit localhost:3000
 Type 'ctrl + m' to see the editor

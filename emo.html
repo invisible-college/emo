@@ -1,0 +1,995 @@
+
+<script type = "statebus"> # -*- mode: coffee -*-
+
+window.option = (name) ->
+    name = name.replace(/[\[]/, "\\[").replace(/[\]]/, "\\]")
+    regex = new RegExp("[\\?&]" + name + "=([^&#]*)")
+    results = regex.exec(location.search)
+    return if results == null then "" else decodeURIComponent(results[1].replace(/\+/g, " "))
+
+window.create_id = ->
+  return new Date().getTime().toString()
+
+window.getLastItemInPath = ->
+	subs = document.location.toString().split('/')
+	lastItem = subs[subs.length - 1].split("?")[0]
+	return lastItem
+
+codeUrl = getLastItemInPath()
+if not codeUrl
+	codeUrl = 'welcome'
+
+include("/code/#{codeUrl}")
+
+
+document.addEventListener('copy', (e) ->
+    clipboard = fetch('clipboard')
+    e.clipboardData.setData('text/plain', clipboard.plain)
+    e.clipboardData.setData('text/html', clipboard.html)
+    e.preventDefault()
+)
+
+document.addEventListener('paste', (e) ->
+
+	clipboard = fetch('clipboard')
+	clipboard.plain = e.clipboardData.getData('text/plain')
+	save(clipboard)
+
+	focusedIds = fetch('focus').currFocus
+
+	#TODO: figure out which fake dom elements have focus
+
+	for f in focusedIds
+
+		dom = doms[f.canvasId]
+		node = getElementById(dom.root, f.nodeId)
+
+		items = []
+		for c in clipboard.plain
+			items.push( getStrElement(c) )
+
+		insertChildren(node, items, dom.root)
+		setSelection(node, node.caret.start + items.length, node.caret.start + items.length)
+		renderAll(dom)
+)
+
+
+#todo: bind text state to children...
+#set the children and re-run.
+
+#in a function we set the element's children
+#then we need to 
+
+
+#what we render is the actual dom
+#we have a virtual dom and then we apply that to the actual dom
+#what we are calling the virtual dom is the real dom
+#we need the virtual version.
+
+
+# node has children
+# fetches that from a key
+# sets elements based on that key
+# 'state' is the actual dom we touch to re-render
+# ''
+
+# we have an actual dom. we edit it and re-render when it changes.
+# so how do we bind state to nodes?
+# sps when we insert a node, we create a method that is reactive
+# this method fetches state based on the node's key
+# and updates the node's properties based on the state (e.g. if str differs from children, we load...)
+# then we re-render the node based on that...
+# we keep a dictonary of these nodes
+# when fetch is re-run, we 
+
+# code is included,
+# then the next code is included
+
+#DOM Elements
+class R
+	constructor: (args) ->
+		@type = 'r'
+		@str = ''
+		if args
+			for a of args
+				@[a] = args[a]
+
+		if not @caret
+			@caret = {start: 0, end: 0, up: 0, down: 0}
+		if not @children
+			@children = []
+		if not @scrollTop
+			@scrollTop = 0
+		if not @scrollLeft
+			@scrollLeft = 0
+
+
+
+class STR extends R
+	constructor: (args) ->
+		super(args, null)
+		@type = 'str'
+
+class COLLAPSE extends R 
+	constructor: (args) ->
+		super(args, null)
+		@type = 'collapse'
+
+
+
+#There is a big thunk when saving code as a string
+#and then compiling that string of coffeescript
+#we don't want that to interfere with the performance
+#of the text editor, so we will reset a timer
+#whenever the text changes. If the timer expires,
+#then we will reload the code based on those edits.
+reloadCodeTimeout = null
+codeCache = {}
+reloadCode = (node) ->
+	if reloadCodeTimeout
+		clearTimeout(reloadCodeTimeout)
+
+	reloadCodeTimeout = setTimeout( 
+		() ->
+			code = fetch(node.codekey)
+			codeCache[node.codekey] = toReadableString(node.children)
+			code.code = codeCache[node.codekey]
+			save(code)			
+
+		, 300	
+	)
+
+#cache the code string
+#compare cache to what was fetched
+#load if different.
+# 1. cache a
+# 2. cache b
+# 3. re-fetch from a and load from it?
+# how would this happen? 
+
+## DOM OPERATIONS
+insertChildren = (node, children, dom, ignoreCode) ->
+	if node.type == 'r'
+		caret = node.caret
+		args = [caret.start, caret.end - caret.start].concat(children)
+		node.children.splice.apply(node.children, args)
+
+		if not ignoreCode and node.codekey
+			reloadCode(node)
+	
+# this method reactively fetches the code that this element represents
+# if the code differs, then we assemble the node's children based on the code.
+# eventually we'll use virtual doms to do this the right way.
+# now suppose we insert an item via typing -> we want to update the code string
+# so that it doesn't differ - becuase this method would then cancel out those differences.
+# so on insertChildren, we want to know if we should update the code string.
+makeStateReactive = (codekey, dom) ->
+	bus.reactive( (codekey, dom) ->
+
+		nodestate = fetch(codekey)
+
+		node = getElementById(dom.root, codekey)
+		if node
+			if nodestate.code and nodestate.code != codeCache[codekey]
+				
+				loadFromString(nodestate.code, node, dom)
+
+		)(codekey, dom)
+
+
+insertChild = (node, item, dom, ignoreCode) ->
+	insertChildren(node, [item], dom, ignoreCode)
+
+getStrElement = (str) ->
+	strobj = new STR({str: str})
+	if str == '\r'
+		strobj.str = '\n'
+		strobj.display = 'block'
+	if str == '\n'
+		strobj.display = 'block'
+	return strobj
+
+insertStr = (str, node, dom, ignoreCode) ->
+	
+	insertChild(node, getStrElement(str), dom, ignoreCode)
+	
+
+deleteChildren = (node, start, howmany, ignoreCode) ->
+	node.children.splice(start, howmany)
+
+	if not ignoreCode and node.codekey
+		reloadCode(node)
+
+setSelection = (el, down, up) ->
+	
+	if down >= el.children.length
+		down = el.children.length
+	
+	if up >= el.children.length
+		up = el.children.length
+
+	if down < 0 then down = 0
+	if up < 0 then up = 0
+
+	caret = el.caret
+	caret.down = down
+	caret.up = up
+	if down < up
+		caret.start = down
+		caret.end = up
+	else
+		caret.start = up
+		caret.end = down
+
+
+	if el.children.length > 0
+		start = Math.min(caret.start, el.children.length - 1)
+		prev = Math.max(caret.start - 1, 0)
+		y = el.children[start].y
+		x = el.children[start].x
+		prevx = el.children[prev].x
+		childheight = el.children[start].height
+		childwidth = el.children[start].width
+		prevwidth  = el.children[prev].width
+		#OLD SCHOOL CONSOLE SCROLLING. CHECK IF WE NEED TO SCROLL IF THE CARET IS OUT OF VIEW.
+		if y + childheight > el.height + el.scrollTop
+			el.scrollTop = y + (childheight * 2) - el.height
+
+		else if y < el.y + el.scrollTop
+			el.scrollTop = y - el.y
+
+		if prevx + prevwidth > el.width + el.scrollLeft
+			el.scrollLeft = prevx  + prevwidth - el.width
+		else if x < el.x + el.scrollLeft
+			el.scrollLeft = x + childwidth - el.x
+
+getBoundingRect = (elements) ->
+	rect = {left: Infinity, top: Infinity, right: 0, bottom: 0}
+	for i in elements
+		if i.x < rect.left
+			rect.left = i.x
+		if i.y < rect.top
+			rect.top = i.y
+		if i.x + i.width > rect.right
+			rect.right = i.x + i.width
+		if i.y + i.height > rect.bottom
+			rect.bottom = i.y + i.height
+
+	return {x: rect.left, y: rect.top, width: rect.right - rect.left, height: rect.bottom - rect.top}
+
+getSiblingBefore = (node, parent) ->
+	before = null
+	for c in parent
+		if c == node
+			return before
+		before = c
+
+	return null
+
+getPreviousLineStart = (node, currIndex) ->
+	thisstart = getThisLineStart(node, currIndex)
+	if thisstart > 0
+		return getThisLineStart(node, thisstart - 1)
+	else
+		return 0
+
+getThisLineStart = (node, currIndex) ->
+	currIndex--
+	while currIndex >= 0 and node.children[currIndex].str != '\n'
+		currIndex--
+
+	return currIndex+1
+
+getNextLineStart = (node, currIndex) ->
+	while currIndex < node.children.length and node.children[currIndex].str != '\n'
+		currIndex++
+
+	return currIndex+1
+
+getLineLength = (node, linestart) ->
+	nextlinestart = getNextLineStart(node, linestart)
+	return nextlinestart - linestart
+
+toReadableString = (buffer, start, howmany) ->
+	if start == undefined
+		start = 0
+	if howmany == undefined
+		howmany = buffer.length
+
+	str = ''
+	for e, index in buffer
+		if index >= start and index - start < howmany
+			str += e.str
+	return str
+
+
+handleKeyPress = (e, dom, node) ->
+	if node.type == 'r'
+		for child in node.children
+			handleKeyPress(e, dom, child)
+
+		if not e.stop and node.focused
+			e.stop = true
+			str = String.fromCharCode(e.ev.which)
+			insertStr(str, node, dom)
+			setSelection(node, node.caret.start + 1, node.caret.start + 1)
+			renderAll(dom)
+			# save(dom)
+
+
+
+handleKeyDown = (e, dom, node, parent) ->
+	if node.type == 'r'
+		for child in node.children
+			handleKeyDown(e, dom, child, node)
+
+		if not e.stop and node.focused
+			char = String.fromCharCode(e.ev.keyCode)
+			if e.ev.keyCode == 9 # tab
+				e.stop = true
+				e.ev.preventDefault()
+				insertStr('\t', node, dom)
+				setSelection(node, node.caret.start + 1, node.caret.start + 1)
+				renderAll(dom)
+				# save(dom)
+
+			if e.ev.keyCode == 8 #backspace
+				e.ev.preventDefault()
+				if node.caret.start == node.caret.end
+					deleteChildren(node, node.caret.start - 1 , 1)
+					setSelection(node, node.caret.start - 1 , node.caret.start - 1)
+					renderAll(dom)
+					# save(dom)
+				else
+					deleteChildren(node, node.caret.start, node.caret.end - node.caret.start)
+					setSelection(node, node.caret.start, node.caret.start)
+					renderAll(dom)
+					# save(dom)
+
+			else if e.ev.keyCode == 37 #left
+				down = node.caret.down
+				up = node.caret.up
+				up--
+				if not e.ev.shiftKey then down = up
+				setSelection(node, down, up)
+				renderAll(dom)
+				# save(dom)
+
+			else if e.ev.keyCode == 39 #right
+				down = node.caret.down
+				up = node.caret.up
+				up++
+				if not e.ev.shiftKey then down = up
+				setSelection(node, down, up)
+				renderAll(dom)
+				# save(dom)
+
+			else if e.ev.keyCode == 40 #down
+				down = node.caret.down
+				up = node.caret.up
+				thislinestart = getThisLineStart(node, up)
+				relative = up - thislinestart
+				nextlinestart = getNextLineStart(node, up)
+				linelength = getLineLength(node, nextlinestart)
+				if relative > linelength
+					relative = linelength - 1
+				up = nextlinestart + relative
+				if not e.ev.shiftKey then down = up
+				setSelection(node, down, up)
+				renderAll(dom)
+
+			else if e.ev.keyCode == 38 #up
+				down = node.caret.down
+				up = node.caret.up
+				thislinestart = getThisLineStart(node, up)
+				relative = up - thislinestart
+				prevlinestart = getPreviousLineStart(node, up)
+				linelength = getLineLength(node, prevlinestart)
+				if relative > linelength
+					relative = linelength - 1
+				up = prevlinestart + relative
+				if not e.ev.shiftKey then down = up
+				setSelection(node, down, up)
+				renderAll(dom)
+
+			else if e.ev.ctrlKey
+				if char == 'A'
+					up = getThisLineStart(node, node.caret.up)
+					down = node.caret.down
+					if not e.ev.shiftKey then down = up
+					setSelection(node, down, up)
+					renderAll(dom)
+					# save(dom)
+				
+				else if char == 'E'
+					up = getNextLineStart(node, node.caret.up) - 1
+					down = node.caret.down
+					if not e.ev.shiftKey then down = up
+					setSelection(node, down, up)
+					renderAll(dom)
+					# save(dom)
+				else if char == 'V'
+					i = 0
+					up = node.caret.up
+					while i < 10
+						if e.ev.shiftKey
+							up = getPreviousLineStart(node, up)
+						else
+							up = getNextLineStart(node, up)
+						i++
+					if not e.ev.shiftKey then down = up
+					setSelection(node, down, up)
+					renderAll(dom)
+
+
+			else if e.ev.metaKey
+				if char == 'A'
+					up = 0
+					down = node.children.length
+					setSelection(node, down, up)
+					e.ev.preventDefault()
+					renderAll(dom)
+					# save(dom)
+
+				else if char == 'C'
+					clipboard = fetch('clipboard')
+					clipboard.plain = toReadableString(node.children, node.caret.start, node.caret.end - node.caret.start)
+					save(clipboard)
+
+
+handleFocus = (e, dom, node) ->
+	# console.log('not handling focus this way right now.')
+	# # clearFocusRecursive(node)
+	# # #getElement
+	# # save(dom)
+
+handleBlur = (e, dom, node) ->
+	clearFocusRecursive(node)
+	# save(dom)
+
+
+containsPoint = (rect, x, y) ->
+	return x >= rect.x and x < rect.x + rect.width and y >= rect.y and y < rect.y + rect.height
+
+
+clearFocusRecursive = (currnode) ->
+	currnode.focused = false
+	if currnode.children
+		for c in currnode.children
+			c.focused = false
+
+setFocus = (nodes) ->
+	for n in nodes
+		state = doms[n.canvasId]
+		node = getElementById(state.root, n.nodeId)
+		node.focused = true
+
+	focus = fetch('focus')
+	focus.currFocus = nodes
+	save(focus)	
+
+getElementById = (node, id) ->
+	if not node then return null
+
+	if node.id == id
+		return node
+
+	else if node.children
+
+		for c in node.children
+			match = getElementById(c, id)
+			if match
+				return match
+	return null
+
+handleMouseDown = (e, state, node) ->
+	
+	x = e.x
+	y = e.y
+	if node.type == 'r'
+		x = e.x + node.scrollLeft
+		y = e.y + node.scrollTop
+		for c in node.children
+			if containsPoint(c, x, y)
+				handleMouseDown(e, state, c)
+
+		if not e.stop
+
+			clearFocusRecursive(state.root)
+			setFocus([{canvasId: state.canvasId, nodeId: node.id}])
+			node.caret.mouseDown = true
+			y = y + 8
+
+			index = getChildIndexFromPos(node, x, y)
+			setSelection(node, index, index)
+			e.stop = true
+			renderAll(state)
+			# save(state)
+			# renderAll(state)
+
+	else if node.type == 'collapse'
+		toCollapse = getElementById(state.root, node.toCollapse)
+		if toCollapse.display == 'block'
+			toCollapse.display = 'none'
+		else
+			toCollapse.display = 'block'
+		renderAll(state)
+		e.stop = true
+		# save(state)
+
+handleMouseUp = (e, state, node) ->
+	if node.type == 'r'
+		for c in node.children
+			x = e.x + node.scrollLeft
+			y = e.y + node.scrollTop
+			if containsPoint(c, x, y)
+				handleMouseUp(e, state, c)
+		if not e.stop
+			node.caret.mouseDown = false
+			# save(state)
+
+handleMouseMove = (e, state, node) ->
+	if node.type == 'r'
+		x = e.x + node.scrollLeft
+		y = e.y + node.scrollTop
+		for c in node.children
+			if containsPoint(c, x, y)
+				handleMouseMove(e, state, c)
+
+		if not e.stop
+			e.stop = true
+			if node.caret.mouseDown
+				index = getChildIndexFromPos(node, x, y)
+				setSelection(node, node.caret.down, index)
+				renderAll(state)
+
+
+
+
+# we re-render the entire canvas each time there's a change.
+# this seems to be ok so far, as long as we don't render
+# the elements that are scrolled out of view.
+renderAll = (dom) ->
+
+	setRectBoundaries(dom.root, 10, 50, offscreenCtx)
+	dom.ctx.clearRect(0, 0, dom.root.width, dom.root.height)
+	if dom.root and dom.root.height
+		render(dom.root, null, dom.ctx)
+
+
+# we render a dom to a canvas
+# we should probably put a render method in each dom element,
+# rather than having one global method with so many if statements.
+# we are working with an actual dom right now.
+render = (node, parent, ctx) ->
+
+	ctx.font = "100 14px Menlo"
+
+	if node.display != 'none' and isInViewVertical(node, parent)
+		if node.type == 'r'
+			
+			scrolltop = node.scrollTop or 0
+			scrollleft = node.scrollLeft or 0
+
+			if node.editable and node.caret.start == 0
+				ctx.fillStyle = "#FFFFFF"
+				ctx.fillRect(node.x - scrollleft, node.y + 3 - scrolltop, 1, 18)
+
+			for child, index in node.children
+				
+				if node.editable and index >= node.caret.start and index < node.caret.end
+					ctx.fillStyle = '#585851'
+					ctx.fillRect(child.x + 1 - scrollleft, child.y + 3 - scrolltop, child.width, child.height)
+					
+				render(child, node, ctx)
+
+				if node.editable and index == node.caret.start - 1
+					ctx.fillStyle = "#FFFFFF"
+					ctx.fillRect(child.x + child.width - scrollleft, child.y + 3 - scrolltop, 1, 18)
+
+			if node.border
+				ctx.strokeStyle = node.border
+				ctx.rect(node.x, node.y + 5, node.width, node.height + 3)
+				ctx.stroke()
+
+		else if node.type == 'str'
+			scrolltop = parent.scrollTop or 0
+			scrollleft = parent.scrollLeft or 0
+			ctx.fillStyle = '#F6F7EF'
+			ctx.fillText(node.str, node.x - scrollleft, node.y + node.height - scrolltop)
+
+		else if node.type == 'collapse'
+			ctx.beginPath()
+			ctx.moveTo(node.x + 2, node.y + 4)
+			ctx.lineTo(node.x + 8, node.y + node.height / 2 + 4)
+			ctx.lineTo(node.x + 2, node.y + node.height)
+			ctx.fillStyle = '#F6F7EF'
+			ctx.fill()
+
+
+
+
+getCursorRelativeToCanvas = (canvasId, e) ->
+	canvas = document.getElementById(canvasId)
+	relx = e.clientX - canvas.offsetLeft 
+	rely = e.clientY - canvas.offsetTop 
+	return {x: relx, y: rely}
+
+
+loadFromString = (str, node, dom) ->
+	node.children = []
+	for c in str
+		node.children.push( getStrElement(c) )
+
+	renderAll(dom)
+
+updateIncludes = (dom, node) ->
+	if node.children
+		str = toReadableString(node.children)
+		reg = /include\([(\'\")](.+)[\'\"]\)/g
+
+		while ((match = reg.exec(str)) != null)
+			sibling = node.children[match.index + match[0].length]
+
+			if not sibling or sibling.type != 'collapse'
+				includer = new R({display: 'none', border: '#eee', width: 500, height: 500, id: match[1], codekey: match[1]})
+				collapse = new COLLAPSE({toCollapse: includer.id})
+				setSelection(node, match.index + match[0].length, match.index + match[0].length)
+				insertChildren(node, [collapse, includer], dom)
+				makeStateReactive(includer.codekey, dom)
+
+
+#The canvas dom element that will render the text editor
+dom.CANVASEDITOR = ->
+	if not doms[@props.id]
+		doms[@props.id] = {}
+	dom = doms[@props.id]
+
+	if not dom.root
+		dom.root = new R({width: @props.width, height: @props.height})
+		textarea = new R({width: @props.width, height: @props.height, id: "/code/#{codeUrl}", editable: true, codekey: "/code/#{codeUrl}"})
+		linenums = new R({width: 50, height: @props.height, id: 'linenums'})
+		dom.root.children.push(linenums)
+		dom.root.children.push(textarea)
+		makeStateReactive(textarea.codekey, dom)
+
+	if dom.opened == undefined
+		dom.opened = false
+	if dom.canvasId == undefined
+		dom.canvasId = @props.id
+	dom.root.height = @props.height
+	dom.root.width = @props.width
+
+	root = dom.root
+
+	updateIncludes(dom, root)
+	DIV null,
+
+		CANVAS
+			style: 
+				cursor:'text'
+				backgroundColor: 'rgba(25, 27, 22, 1)'
+				height: @props.height
+				width: @props.width
+
+			tabIndex: 1
+			id: @props.id
+
+			onFocus: (e) =>
+
+				handleFocus({ev: e, stop: false}, dom, root)
+				null
+			onBlur: (e) =>
+				handleBlur({ev: e, stop: false}, dom, root)
+				null
+			onKeyPress: (e) =>
+				handleKeyPress( {ev: e, stop: false}, dom, root)
+				e.preventDefault()
+				
+			onKeyDown: (e) =>
+				handleKeyDown({ev: e, stop: false}, dom, root)
+				
+			onMouseMove: (e) =>
+				cursor = getCursorRelativeToCanvas(@props.id, e)
+				handleMouseMove({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
+				null
+			onMouseDown: (e) =>
+				cursor = getCursorRelativeToCanvas(@props.id, e)
+				handleMouseDown({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
+				null
+			onMouseUp: (e) =>
+				cursor = getCursorRelativeToCanvas(@props.id, e)
+				handleMouseUp({ev : e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
+				null
+		CANVAS
+			style: display: 'none'
+			id: 'fake'
+
+getChildIndexFromPos = (node, x, y) ->
+	line = getClosestLineToYPos(node, y)
+
+	if line
+		y = line.y
+
+	index = getClosestChildToPos(node, x, y)
+	if index < 0
+		return index
+
+	if node.children[index].str == '\n'
+		index++
+	else if index == node.children.length - 1 or node.children[index + 1].str == '\n'
+		index++
+
+	return index
+
+getClosestLineToYPos = (node, yPos) ->
+	dist = Infinity
+	toReturn = null
+	for e in node.children
+		topOrBottomDist = Math.min(Math.abs(yPos - e.y), Math.abs(yPos - (e.y + e.height)))
+		if topOrBottomDist < dist
+			dist = topOrBottomDist
+			toReturn = e
+
+	return toReturn
+
+getClosestChildToPos = (node, xPos, yPos) ->
+	dist = Infinity
+	toReturn = -1
+	for e, index in node.children
+
+		if yPos == e.y
+			if Math.abs(xPos - e.x) < dist
+				dist = Math.abs(xPos - e.x)
+				toReturn = index
+
+	return toReturn
+
+
+isInViewVertical = (child, parent) ->
+	if not parent or child.x == undefined
+		return true
+
+	top = parent.scrollTop or 0
+	left = parent.scrollLeft or 0
+	top += parent.y
+	left += parent.x
+	if child.type == 'str'
+		top -= 18
+	nodetop = child.y - top
+	nodeleft = child.x - left
+	if nodetop < 0
+		console.log(child.y + ' , ' + parent.y)
+	return nodetop >= 0 and nodetop < parent.height
+
+
+setRectBoundaries = (node, x, y, offscreentCtx, parent, previous) ->
+
+	if not isInViewVertical(node, parent)
+		return node
+
+	offscreentCtx.font = "100 14px Menlo"
+	node.x = x
+	node.y = y
+
+	if node.display == 'block' #render stuff on a new line
+		
+		if previous
+			node.y = previous.y + previous.height
+			y = node.y
+		
+		else if node.str == '\n' #if the first character is a new line, we don't have measurements so wing it
+			node.y = y + 18
+			y = node.y
+
+		if parent
+			node.x = parent.x
+			x = node.x
+
+
+	if node.type == 'r'
+
+		if node.display != 'none'
+			prev = null
+			for c in node.children
+				result = setRectBoundaries(c, x, y, offscreentCtx, node, prev)
+				x = result.x + result.width
+				y = result.y
+				prev = c
+
+			rect = getBoundingRect(node.children)
+			node.childrenWidth = rect.width
+			node.childrenHeight = rect.height
+
+		return node
+
+	else if node.type == 'str'
+		result = { x: x, y: y, width:0, height: 16 }
+		result.width = offscreentCtx.measureText(node.str).width
+		if node.str == '\n'
+			result.width = 0
+
+		if node.str == '\t' then result.width *= 4
+		node.width = result.width
+		node.height = result.height
+		return result
+
+	else if node.type == 'collapse'
+		node.width = 8
+		node.height = 16
+		return node
+
+	return {x:0, y:0, width: 0, height: 0}
+
+
+
+
+
+getStyle = (index, styleElements) ->
+	style = {fillStyle: '#F6F7EF'}
+	for e in styleElements
+		if index >= e.start and index < e.end
+			if e.style.fillStyle
+				style.fillStyle = e.style.fillStyle
+			if e.style.underline
+				style.underline = e.style.underline
+
+	return style
+
+
+#It's possible to have multiple canvas editors,
+#each has our own custom canvas dom. We keep track of
+#those here.
+doms = {}
+
+#This is used to render text offscreen so we can measure it's width.
+offscreenCtx = null
+
+#This is called if the web page wants the canvas to re-render.
+dom.CANVASEDITOR.refresh = ->
+
+	if not doms[@props.id]
+		doms[@props.id] = {}
+	dom = doms[@props.id]
+
+	document.getElementById(@props.id).focus()
+
+	if not dom.root
+		dom.root = new R({width: @props.width, height: @props.height, id: "/code/#{codeUrl}", codekey: "/code/#{codeUrl}"}, null, dom)
+		makeStateReactive(dom.root.codekey, dom)
+	if dom.opened == undefined
+		dom.opened = false
+	if dom.canvasId == undefined
+		dom.canvasId = @props.id
+
+	root = dom.root
+	offscreenCtx = createHiDPICanvas(dom.root.width, dom.root.height, null, 'fake').getContext('2d')
+	dom.ctx = createHiDPICanvas(dom.root.width, dom.root.height, null, @props.id).getContext('2d')
+	renderAll(dom)
+
+
+
+
+
+getPixelRatio = (canvas) ->
+	ctx = canvas.getContext("2d")
+	dpr = window.devicePixelRatio or 1
+	bsr = ctx.webkitBackingStorePixelRatio or
+		ctx.mozBackingStorePixelRatio or
+		ctx.msBackingStorePixelRatio or
+		ctx.oBackingStorePixelRatio or
+		ctx.backingStorePixelRatio or 1
+	
+	return dpr / bsr
+
+
+
+createHiDPICanvas = (w, h, ratio, id) ->
+
+	can = document.getElementById(id)
+	if not ratio then ratio = getPixelRatio(can)
+
+	can.width = w * ratio
+	can.height = h * ratio
+	can.style.width = w + "px"
+	can.style.height = h + "px"
+	can.getContext("2d").setTransform(ratio, 0, 0, ratio, 0, 0)
+	return can
+
+
+
+</script>
+<script type = 'statebus' id='main'>
+
+
+editorwidth = 600
+
+#If the user doesn't write a dom.CONTENT element, we'll just render nothing.
+dom.CONTENT = ->
+	DIV null,
+
+
+#Here's the main page that hosts the editor and the resulting html.
+dom.BODY = ->
+	
+
+	#whenever the user writes some code, we save to 'include' so the UI will re-render
+	includestate = fetch('include')
+
+	#We check if we should show the editor, and how big the editor should be
+	windowstate = fetch('window')
+	if not windowstate.height
+		windowstate.height = window.innerHeight
+		windowstate.width = window.innerWidth
+	state = fetch('mainstate')
+	if state.opened == undefined
+		state.opened = false
+
+
+	DIV
+		style: 
+			width: '100%'
+			height: '100%'
+			outline: 'none'
+
+		tabIndex: 1
+
+
+		onKeyDown: (e) ->
+			#Press ctrl + m to open the editor
+			if e.ctrlKey and String.fromCharCode(e.keyCode) == 'M'
+				e.preventDefault()
+				state.opened = not state.opened
+				save(state)
+		DIV
+			style:
+				display: if not state.opened then 'none'
+				position: 'fixed'
+				top: 0
+				left: 0
+			#Here's the editor
+			CANVASEDITOR
+				id: 'maincanvas'
+				width: editorwidth
+				height: windowstate.height
+
+		DIV
+			style:
+				position: 'relative'
+				left: if not state.opened then 0 else editorwidth
+				top: 0
+				
+			#Here's the view rendered from the user's code.
+			INCLUDE null,
+
+
+
+
+window.onresize = (e) ->
+	windowstate = fetch('window')
+	windowstate.height = e.target.innerHeight
+	windowstate.width = e.target.innerWidth
+	save(windowstate)
+
+
+dom.INCLUDE = ->
+	DIV
+		id: 'include'
+		try #don't want this to crash, so let's make sure it's returning a valid react component
+			returnVal = CONTENT(null, null)
+			if returnVal.__proto__ and returnVal.__proto__._isReactElement
+				returnVal
+
+		catch err
+			console.error(err)
+			DIV()
+
+
+</script>
+
+
+<script>
+  statebus_server = 'http://localhost:3000'
+</script>
+<script src="/mo-statebus-client.js"></script>
+<style type ='text/css'>

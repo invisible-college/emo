@@ -3,7 +3,18 @@
 Hi there! This is a a live code editor.
 I'm calling it 'emo' - cuz it's used to support therapy
 If you want to create a new live edit page using emo hosted on cheeseburger, just go to
+
 cheeseburgertherapy.com/emo/YOURPAGE
+
+Alternatively, to run your own emo editor, clone this repository and run it:
+```
+npm install statebus-server --save
+supervisor emo.js
+```
+Then visit localhost:3000
+
+Type 'ctrl + m' to see the editor
+
 
 Some key commands:
 - ctrl + v moves 10 lines down and can be used for fast scrolling down
@@ -26,14 +37,3 @@ Known issues:
 - caret doesn't blink
 - copy/paste implemented, but 'cut' is not
 - fetch / save in the main method is reactive
-
-
-
-To run the code:
-```
-npm install statebus-server --save
-supervisor emo.js
-```
-
-Then visit localhost:3000
-Type 'ctrl + m' to see the editor

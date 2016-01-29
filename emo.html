@@ -19,9 +19,14 @@ codeUrl = getLastItemInPath()
 if not codeUrl
 	codeUrl = 'welcome'
 
+
+#If we visit /emo/blah, then let's load code at the key /code/blah
 include("/code/#{codeUrl}")
 
 
+
+
+#support copy and paste in the editor
 document.addEventListener('copy', (e) ->
     clipboard = fetch('clipboard')
     e.clipboardData.setData('text/plain', clipboard.plain)
@@ -46,47 +51,16 @@ document.addEventListener('paste', (e) ->
 
 		items = []
 		for c in clipboard.plain
-			items.push( getStrElement(c) )
+			items.push( new STR(c) )
 
-		insertChildren(node, items, dom.root)
+		node.insertChildren(items)
 		setSelection(node, node.caret.start + items.length, node.caret.start + items.length)
 		renderAll(dom)
 )
 
 
-#todo: bind text state to children...
-#set the children and re-run.
-
-#in a function we set the element's children
-#then we need to 
-
-
-#what we render is the actual dom
-#we have a virtual dom and then we apply that to the actual dom
-#what we are calling the virtual dom is the real dom
-#we need the virtual version.
-
-
-# node has children
-# fetches that from a key
-# sets elements based on that key
-# 'state' is the actual dom we touch to re-render
-# ''
-
-# we have an actual dom. we edit it and re-render when it changes.
-# so how do we bind state to nodes?
-# sps when we insert a node, we create a method that is reactive
-# this method fetches state based on the node's key
-# and updates the node's properties based on the state (e.g. if str differs from children, we load...)
-# then we re-render the node based on that...
-# we keep a dictonary of these nodes
-# when fetch is re-run, we 
-
-# code is included,
-# then the next code is included
-
-#DOM Elements
-class R
+#Our special canvas-based render tree
+class R #R for 'rectangle'
 	constructor: (args) ->
 		@type = 'r'
 		@str = ''
@@ -94,28 +68,118 @@ class R
 			for a of args
 				@[a] = args[a]
 
-		if not @caret
-			@caret = {start: 0, end: 0, up: 0, down: 0}
-		if not @children
-			@children = []
-		if not @scrollTop
-			@scrollTop = 0
-		if not @scrollLeft
-			@scrollLeft = 0
+		#initialize some default fields
+		if not @caret       then @caret = {start: 0, end: 0, up: 0, down: 0}
+		if not @children    then @children = []
+		if not @scrollTop   then @scrollTop = 0
+		if not @scrollLeft  then @scrollLeft = 0
+		if not @font        then @font = "100 14px Menlo"
+		if not @selectColor then @selectColor = '#585851'
+		if not @fontColor   then @fontColor = "#FFFFFF"
+		if not @caretColor  then @caretColor = @fontColor
+		if not @lineHeight  then @lineHeight = 18
 
 
+	insertChildren: (toadd, ignoreCode) ->
+		args = [@caret.start, @caret.end - @caret.start].concat(toadd)
+		@children.splice.apply(@children, args)
 
-class STR extends R
-	constructor: (args) ->
-		super(args, null)
+		if not ignoreCode and @codekey
+			reloadCode(@)
+	
+		if @onChange
+			@onChange({type: 'addedChildren', added: toadd}) 
+
+	deleteChildren: (start, howmany, ignoreCode) ->
+		deleted = @children.splice(start, howmany)
+		if not ignoreCode and @codekey
+			reloadCode(@)
+
+		if @onChange
+			@onChange({type: 'deletedChildren', deleted: deleted})
+
+	render: (ctx) ->
+		ctx.font = @font
+		
+		#if the caret is at the beginning render it
+		if @editable and @caret.start == 0
+			ctx.fillStyle = @caretColor
+			ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop, 1, @lineHeight)
+
+
+		for child, index in @children
+
+			#render selection background
+			if @editable and index >= @caret.start and index < @caret.end
+				ctx.fillStyle = @selectColor
+				ctx.fillRect(child.x + 1, child.y + 3, child.width, child.height)
+			
+			#render the child
+			ctx.fillStyle = @fontColor
+			child.render(ctx)
+
+			# render the caret after this child if it comes next
+			if @editable and index == @caret.start - 1
+				ctx.fillStyle = @caretColor
+				ctx.fillRect(child.x + child.width, child.y + 3 , 1, @lineHeight)
+
+		#render the border
+		if @border
+			ctx.strokeStyle = @border
+			ctx.rect(@x, @y + 5, @width, @height + 3)
+			ctx.stroke()
+
+	layout: (offscreentCtx) ->
+		offscreentCtx.font = @font
+		previous = {x : @x - @scrollLeft, y : @y - @scrollTop , height: @lineHeight, width: 0}
+		for c in @children
+			c.x = previous.x + previous.width
+			c.y = previous.y
+			if c.lineBreak
+				c.y += previous.height
+				c.x = @x
+
+			c.layout(offscreentCtx)
+			previous = c
+
+
+#string element
+class STR extends R 
+	constructor: (str) ->
+		super({str : str})
 		@type = 'str'
+		
+		if @str == '\r'
+			@str = '\n'
 
+		if @str.endsWith('\n') then @lineBreak = true
+		@height = @lineHeight
+		
+
+
+	render: (ctx) ->
+		ctx.fillText(@str, @x, @y + @height)
+
+	layout: (offscreentCtx) ->
+		@width = 0
+		if not @lineBreak
+			@width = offscreentCtx.measureText(@str).width
+		if @str == '\t'
+			@width *= 4
+
+#a little triangle widget I used to show/hide included code.
 class COLLAPSE extends R 
 	constructor: (args) ->
 		super(args, null)
 		@type = 'collapse'
 
-
+	render: (ctx) ->
+		ctx.beginPath()
+		ctx.moveTo(@x + 2, @y + 4)
+		ctx.lineTo(@x + 8, node.y + @height / 2 + 4)
+		ctx.lineTo(@x + 2, @y + @height)
+		ctx.fillStyle = '#F6F7EF'
+		ctx.fill()
 
 #There is a big thunk when saving code as a string
 #and then compiling that string of coffeescript
@@ -137,25 +201,8 @@ reloadCode = (node) ->
 			save(code)			
 
 		, 300	
-	)
+	)	
 
-#cache the code string
-#compare cache to what was fetched
-#load if different.
-# 1. cache a
-# 2. cache b
-# 3. re-fetch from a and load from it?
-# how would this happen? 
-
-## DOM OPERATIONS
-insertChildren = (node, children, dom, ignoreCode) ->
-	if node.type == 'r'
-		caret = node.caret
-		args = [caret.start, caret.end - caret.start].concat(children)
-		node.children.splice.apply(node.children, args)
-
-		if not ignoreCode and node.codekey
-			reloadCode(node)
 	
 # this method reactively fetches the code that this element represents
 # if the code differs, then we assemble the node's children based on the code.
@@ -171,34 +218,16 @@ makeStateReactive = (codekey, dom) ->
 		node = getElementById(dom.root, codekey)
 		if node
 			if nodestate.code and nodestate.code != codeCache[codekey]
-				
 				loadFromString(nodestate.code, node, dom)
 
 		)(codekey, dom)
 
 
-insertChild = (node, item, dom, ignoreCode) ->
-	insertChildren(node, [item], dom, ignoreCode)
 
-getStrElement = (str) ->
-	strobj = new STR({str: str})
-	if str == '\r'
-		strobj.str = '\n'
-		strobj.display = 'block'
-	if str == '\n'
-		strobj.display = 'block'
-	return strobj
-
+## DOM OPERATIONS ---- TO BE MOVED AS METHODS OF DOM OBJECT
 insertStr = (str, node, dom, ignoreCode) ->
+	node.insertChildren([new STR(str)], ignoreCode)
 	
-	insertChild(node, getStrElement(str), dom, ignoreCode)
-	
-
-deleteChildren = (node, start, howmany, ignoreCode) ->
-	node.children.splice(start, howmany)
-
-	if not ignoreCode and node.codekey
-		reloadCode(node)
 
 setSelection = (el, down, up) ->
 	
@@ -222,6 +251,14 @@ setSelection = (el, down, up) ->
 		caret.end = down
 
 
+	setScrollOldSchool(el)
+
+
+#OLD SCHOOL CONSOLE SCROLLING. 
+#CHECK IF WE NEED TO SCROLL IF THE CARET IS OUT OF VIEW
+setScrollOldSchool = (el) ->
+	caret = el.caret
+
 	if el.children.length > 0
 		start = Math.min(caret.start, el.children.length - 1)
 		prev = Math.max(caret.start - 1, 0)
@@ -231,18 +268,24 @@ setSelection = (el, down, up) ->
 		childheight = el.children[start].height
 		childwidth = el.children[start].width
 		prevwidth  = el.children[prev].width
-		#OLD SCHOOL CONSOLE SCROLLING. CHECK IF WE NEED TO SCROLL IF THE CARET IS OUT OF VIEW.
-		if y + childheight > el.height + el.scrollTop
-			el.scrollTop = y + (childheight * 2) - el.height
+		
+		
+		if y + childheight > el.y + el.height
+			el.scrollTop += y + (childheight*2) - el.height - el.y
 
-		else if y < el.y + el.scrollTop
-			el.scrollTop = y - el.y
+		else if y < el.y
+			el.scrollTop += y - el.y
 
-		if prevx + prevwidth > el.width + el.scrollLeft
-			el.scrollLeft = prevx  + prevwidth - el.width
-		else if x < el.x + el.scrollLeft
-			el.scrollLeft = x + childwidth - el.x
+		if prevx + prevwidth > el.width
+			el.scrollLeft += prevx  + (prevwidth*2) - el.width - el.x
 
+		else if x < el.x
+			el.scrollLeft += x - el.x
+
+	if el.onOldSchoolScroll
+		el.onOldSchoolScroll(el)
+
+# 2D element selection methods
 getBoundingRect = (elements) ->
 	rect = {left: Infinity, top: Infinity, right: 0, bottom: 0}
 	for i in elements
@@ -256,6 +299,8 @@ getBoundingRect = (elements) ->
 			rect.bottom = i.y + i.height
 
 	return {x: rect.left, y: rect.top, width: rect.right - rect.left, height: rect.bottom - rect.top}
+
+
 
 getSiblingBefore = (node, parent) ->
 	before = null
@@ -290,6 +335,8 @@ getLineLength = (node, linestart) ->
 	nextlinestart = getNextLineStart(node, linestart)
 	return nextlinestart - linestart
 
+
+#render the dom as a string
 toReadableString = (buffer, start, howmany) ->
 	if start == undefined
 		start = 0
@@ -303,6 +350,17 @@ toReadableString = (buffer, start, howmany) ->
 	return str
 
 
+
+
+# input handlers ----
+
+LEFT = 37
+RIGHT = 39
+DOWN = 40
+UP = 38
+TAB = 9
+BACKSPACE = 8
+
 handleKeyPress = (e, dom, node) ->
 	if node.type == 'r'
 		for child in node.children
@@ -314,7 +372,7 @@ handleKeyPress = (e, dom, node) ->
 			insertStr(str, node, dom)
 			setSelection(node, node.caret.start + 1, node.caret.start + 1)
 			renderAll(dom)
-			# save(dom)
+			
 
 
 
@@ -325,46 +383,50 @@ handleKeyDown = (e, dom, node, parent) ->
 
 		if not e.stop and node.focused
 			char = String.fromCharCode(e.ev.keyCode)
-			if e.ev.keyCode == 9 # tab
+			if e.ev.keyCode == TAB
 				e.stop = true
 				e.ev.preventDefault()
 				insertStr('\t', node, dom)
 				setSelection(node, node.caret.start + 1, node.caret.start + 1)
 				renderAll(dom)
-				# save(dom)
+				
 
-			if e.ev.keyCode == 8 #backspace
+			if e.ev.keyCode == BACKSPACE
 				e.ev.preventDefault()
 				if node.caret.start == node.caret.end
-					deleteChildren(node, node.caret.start - 1 , 1)
+					node.deleteChildren(node.caret.start - 1 , 1)
 					setSelection(node, node.caret.start - 1 , node.caret.start - 1)
 					renderAll(dom)
-					# save(dom)
+					
 				else
-					deleteChildren(node, node.caret.start, node.caret.end - node.caret.start)
+					node.deleteChildren(node.caret.start, node.caret.end - node.caret.start)
 					setSelection(node, node.caret.start, node.caret.start)
 					renderAll(dom)
-					# save(dom)
+					
 
-			else if e.ev.keyCode == 37 #left
+			else if e.ev.keyCode == LEFT
 				down = node.caret.down
 				up = node.caret.up
 				up--
 				if not e.ev.shiftKey then down = up
+				e.stop = true
+				e.ev.preventDefault()
 				setSelection(node, down, up)
 				renderAll(dom)
-				# save(dom)
+				
 
-			else if e.ev.keyCode == 39 #right
+			else if e.ev.keyCode == RIGHT
 				down = node.caret.down
 				up = node.caret.up
 				up++
 				if not e.ev.shiftKey then down = up
 				setSelection(node, down, up)
+				e.stop = true
+				e.ev.preventDefault()
 				renderAll(dom)
-				# save(dom)
+				
 
-			else if e.ev.keyCode == 40 #down
+			else if e.ev.keyCode == DOWN
 				down = node.caret.down
 				up = node.caret.up
 				thislinestart = getThisLineStart(node, up)
@@ -376,9 +438,11 @@ handleKeyDown = (e, dom, node, parent) ->
 				up = nextlinestart + relative
 				if not e.ev.shiftKey then down = up
 				setSelection(node, down, up)
+				e.stop = true
+				e.ev.preventDefault()
 				renderAll(dom)
 
-			else if e.ev.keyCode == 38 #up
+			else if e.ev.keyCode == UP #up
 				down = node.caret.down
 				up = node.caret.up
 				thislinestart = getThisLineStart(node, up)
@@ -390,6 +454,8 @@ handleKeyDown = (e, dom, node, parent) ->
 				up = prevlinestart + relative
 				if not e.ev.shiftKey then down = up
 				setSelection(node, down, up)
+				e.stop = true
+				e.ev.preventDefault()
 				renderAll(dom)
 
 			else if e.ev.ctrlKey
@@ -399,7 +465,6 @@ handleKeyDown = (e, dom, node, parent) ->
 					if not e.ev.shiftKey then down = up
 					setSelection(node, down, up)
 					renderAll(dom)
-					# save(dom)
 				
 				else if char == 'E'
 					up = getNextLineStart(node, node.caret.up) - 1
@@ -407,7 +472,7 @@ handleKeyDown = (e, dom, node, parent) ->
 					if not e.ev.shiftKey then down = up
 					setSelection(node, down, up)
 					renderAll(dom)
-					# save(dom)
+					
 				else if char == 'V'
 					i = 0
 					up = node.caret.up
@@ -429,7 +494,7 @@ handleKeyDown = (e, dom, node, parent) ->
 					setSelection(node, down, up)
 					e.ev.preventDefault()
 					renderAll(dom)
-					# save(dom)
+					
 
 				else if char == 'C'
 					clipboard = fetch('clipboard')
@@ -439,13 +504,9 @@ handleKeyDown = (e, dom, node, parent) ->
 
 handleFocus = (e, dom, node) ->
 	# console.log('not handling focus this way right now.')
-	# # clearFocusRecursive(node)
-	# # #getElement
-	# # save(dom)
 
 handleBlur = (e, dom, node) ->
 	clearFocusRecursive(node)
-	# save(dom)
 
 
 containsPoint = (rect, x, y) ->
@@ -483,14 +544,9 @@ getElementById = (node, id) ->
 	return null
 
 handleMouseDown = (e, state, node) ->
-	
-	x = e.x
-	y = e.y
 	if node.type == 'r'
-		x = e.x + node.scrollLeft
-		y = e.y + node.scrollTop
 		for c in node.children
-			if containsPoint(c, x, y)
+			if containsPoint(c, e.x, e.y)
 				handleMouseDown(e, state, c)
 
 		if not e.stop
@@ -500,12 +556,10 @@ handleMouseDown = (e, state, node) ->
 			node.caret.mouseDown = true
 			y = y + 8
 
-			index = getChildIndexFromPos(node, x, y)
+			index = getChildIndexFromPos(node, e.x, e.y)
 			setSelection(node, index, index)
 			e.stop = true
 			renderAll(state)
-			# save(state)
-			# renderAll(state)
 
 	else if node.type == 'collapse'
 		toCollapse = getElementById(state.root, node.toCollapse)
@@ -520,26 +574,21 @@ handleMouseDown = (e, state, node) ->
 handleMouseUp = (e, state, node) ->
 	if node.type == 'r'
 		for c in node.children
-			x = e.x + node.scrollLeft
-			y = e.y + node.scrollTop
-			if containsPoint(c, x, y)
+			if containsPoint(c, e.x, e.y)
 				handleMouseUp(e, state, c)
 		if not e.stop
 			node.caret.mouseDown = false
-			# save(state)
 
 handleMouseMove = (e, state, node) ->
 	if node.type == 'r'
-		x = e.x + node.scrollLeft
-		y = e.y + node.scrollTop
 		for c in node.children
-			if containsPoint(c, x, y)
+			if containsPoint(c, e.x, e.y)
 				handleMouseMove(e, state, c)
 
 		if not e.stop
 			e.stop = true
 			if node.caret.mouseDown
-				index = getChildIndexFromPos(node, x, y)
+				index = getChildIndexFromPos(node, e.x, e.y)
 				setSelection(node, node.caret.down, index)
 				renderAll(state)
 
@@ -550,63 +599,12 @@ handleMouseMove = (e, state, node) ->
 # this seems to be ok so far, as long as we don't render
 # the elements that are scrolled out of view.
 renderAll = (dom) ->
-
-	setRectBoundaries(dom.root, 10, 50, offscreenCtx)
-	dom.ctx.clearRect(0, 0, dom.root.width, dom.root.height)
 	if dom.root and dom.root.height
-		render(dom.root, null, dom.ctx)
-
-
-# we render a dom to a canvas
-# we should probably put a render method in each dom element,
-# rather than having one global method with so many if statements.
-# we are working with an actual dom right now.
-render = (node, parent, ctx) ->
-
-	ctx.font = "100 14px Menlo"
-
-	if node.display != 'none' and isInViewVertical(node, parent)
-		if node.type == 'r'
-			
-			scrolltop = node.scrollTop or 0
-			scrollleft = node.scrollLeft or 0
-
-			if node.editable and node.caret.start == 0
-				ctx.fillStyle = "#FFFFFF"
-				ctx.fillRect(node.x - scrollleft, node.y + 3 - scrolltop, 1, 18)
-
-			for child, index in node.children
-				
-				if node.editable and index >= node.caret.start and index < node.caret.end
-					ctx.fillStyle = '#585851'
-					ctx.fillRect(child.x + 1 - scrollleft, child.y + 3 - scrolltop, child.width, child.height)
-					
-				render(child, node, ctx)
-
-				if node.editable and index == node.caret.start - 1
-					ctx.fillStyle = "#FFFFFF"
-					ctx.fillRect(child.x + child.width - scrollleft, child.y + 3 - scrolltop, 1, 18)
-
-			if node.border
-				ctx.strokeStyle = node.border
-				ctx.rect(node.x, node.y + 5, node.width, node.height + 3)
-				ctx.stroke()
-
-		else if node.type == 'str'
-			scrolltop = parent.scrollTop or 0
-			scrollleft = parent.scrollLeft or 0
-			ctx.fillStyle = '#F6F7EF'
-			ctx.fillText(node.str, node.x - scrollleft, node.y + node.height - scrolltop)
-
-		else if node.type == 'collapse'
-			ctx.beginPath()
-			ctx.moveTo(node.x + 2, node.y + 4)
-			ctx.lineTo(node.x + 8, node.y + node.height / 2 + 4)
-			ctx.lineTo(node.x + 2, node.y + node.height)
-			ctx.fillStyle = '#F6F7EF'
-			ctx.fill()
-
-
+		dom.root.x = 0
+		dom.root.y = 0
+		dom.root.layout(offscreenCtx) #we re-layout the whole dom each time.
+		dom.ctx.clearRect(0, 0, dom.root.width, dom.root.height)
+		dom.root.render(dom.ctx)
 
 
 getCursorRelativeToCanvas = (canvasId, e) ->
@@ -616,13 +614,20 @@ getCursorRelativeToCanvas = (canvasId, e) ->
 	return {x: relx, y: rely}
 
 
+
+#Take a string and add each char to the dom element's children
 loadFromString = (str, node, dom) ->
 	node.children = []
 	for c in str
-		node.children.push( getStrElement(c) )
+		node.children.push( new STR(c) )
+
+	if node.onChange
+		node.onChange({type: 'addedChildren', added: node.children})
 
 	renderAll(dom)
 
+#If someone typed include('...') then
+#we put a widget in for editing that code
 updateIncludes = (dom, node) ->
 	if node.children
 		str = toReadableString(node.children)
@@ -635,8 +640,9 @@ updateIncludes = (dom, node) ->
 				includer = new R({display: 'none', border: '#eee', width: 500, height: 500, id: match[1], codekey: match[1]})
 				collapse = new COLLAPSE({toCollapse: includer.id})
 				setSelection(node, match.index + match[0].length, match.index + match[0].length)
-				insertChildren(node, [collapse, includer], dom)
+				node.insertChildren([collapse, includer])
 				makeStateReactive(includer.codekey, dom)
+
 
 
 #The canvas dom element that will render the text editor
@@ -647,8 +653,28 @@ dom.CANVASEDITOR = ->
 
 	if not dom.root
 		dom.root = new R({width: @props.width, height: @props.height})
-		textarea = new R({width: @props.width, height: @props.height, id: "/code/#{codeUrl}", editable: true, codekey: "/code/#{codeUrl}"})
-		linenums = new R({width: 50, height: @props.height, id: 'linenums'})
+		textarea = new R({width: @props.width, height: @props.height, id: "/code/#{codeUrl}", editable: true, codekey: "/code/#{codeUrl}"})	
+		linenums = new R({width: 40, height: @props.height, id: 'linenums', fontColor: '#aaa'})
+		linenums.children.push(new STR('1'));
+		linenums.children.push(new STR('\n'));
+
+		textarea.onChange = (e) ->
+			if e.type == 'addedChildren'
+				for c in e.added
+					if c.str == '\n'
+						count = linenums.children.length  / 2 + 1
+						linenums.children.push( new STR(count.toString()) )
+						linenums.children.push( new STR('\n') )
+
+			else if e.type == 'deletedChildren'
+				for c in e.deleted
+					if c.str == '\n'
+						linenums.children.pop()
+						linenums.children.pop()
+
+		textarea.onOldSchoolScroll = (el) ->
+			linenums.scrollTop = el.scrollTop
+
 		dom.root.children.push(linenums)
 		dom.root.children.push(textarea)
 		makeStateReactive(textarea.codekey, dom)
@@ -688,7 +714,7 @@ dom.CANVASEDITOR = ->
 				
 			onKeyDown: (e) =>
 				handleKeyDown({ev: e, stop: false}, dom, root)
-				
+				null
 			onMouseMove: (e) =>
 				cursor = getCursorRelativeToCanvas(@props.id, e)
 				handleMouseMove({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
@@ -701,6 +727,8 @@ dom.CANVASEDITOR = ->
 				cursor = getCursorRelativeToCanvas(@props.id, e)
 				handleMouseUp({ev : e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
 				null
+
+
 		CANVAS
 			style: display: 'none'
 			id: 'fake'
@@ -901,7 +929,7 @@ createHiDPICanvas = (w, h, ratio, id) ->
 </script>
 <script type = 'statebus' id='main'>
 
-
+#We should eventually have a resizable editor.
 editorwidth = 600
 
 #If the user doesn't write a dom.CONTENT element, we'll just render nothing.

@@ -137,7 +137,7 @@ class R #R for 'rectangle'
 			c.y = previous.y
 			if c.lineBreak
 				c.y += previous.height
-				c.x = @x
+				c.x = @x - @scrollLeft
 
 			c.layout(offscreentCtx)
 			previous = c
@@ -261,10 +261,11 @@ setScrollOldSchool = (el) ->
 
 	if el.children.length > 0
 		start = Math.min(caret.start, el.children.length - 1)
-		prev = Math.max(caret.start - 1, 0)
+		prev = Math.max(caret.start - 2, 0)
 		y = el.children[start].y
 		x = el.children[start].x
 		prevx = el.children[prev].x
+
 		childheight = el.children[start].height
 		childwidth = el.children[start].width
 		prevwidth  = el.children[prev].width
@@ -275,12 +276,12 @@ setScrollOldSchool = (el) ->
 
 		else if y < el.y
 			el.scrollTop += y - el.y
-
-		if prevx + prevwidth > el.width
-			el.scrollLeft += prevx  + (prevwidth*2) - el.width - el.x
-
-		else if x < el.x
-			el.scrollLeft += x - el.x
+		
+		if el.children[prev+1].str != '\n' and prevx + (prevwidth*2) > el.x + el.width
+			el.scrollLeft += prevx + (prevwidth*4) - el.x - el.width
+			
+		else if el.children[prev+1].x < el.x
+			el.scrollLeft += el.children[prev+1].x - el.x
 
 	if el.onOldSchoolScroll
 		el.onOldSchoolScroll(el)
@@ -653,7 +654,7 @@ dom.CANVASEDITOR = ->
 
 	if not dom.root
 		dom.root = new R({width: @props.width, height: @props.height})
-		textarea = new R({width: @props.width, height: @props.height, id: "/code/#{codeUrl}", editable: true, codekey: "/code/#{codeUrl}"})	
+		textarea = new R({width: @props.width - 40, height: @props.height, id: "/code/#{codeUrl}", editable: true, codekey: "/code/#{codeUrl}"})	
 		linenums = new R({width: 40, height: @props.height, id: 'linenums', fontColor: '#aaa'})
 		linenums.children.push(new STR('1'));
 		linenums.children.push(new STR('\n'));

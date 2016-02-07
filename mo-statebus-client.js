@@ -881,13 +881,16 @@ function saveIncomingEdits(message, fieldname){
     //Remember that their local version = our remote version and vice versa.
         
         //Let's check if something wacky happened.
-        if(message.remoteVersion !== shadow.localVersion){
-            
-
-            //TODO: handle this case...
-            throw new Error('The diff sync version numbers dont match: ' + message.remoteVersion + ' , ' + shadow.localVersion );
+        if(message.remoteVersion < shadow.localVersion){
+            //This edit is stale, so we can ignore it...
+           return;
         }
 
+        else if(message.remoteVersion > shadow.localVersion){
+             //TODO: handle this case...
+            throw new Error('The diff sync version numbers dont match: ' + message.remoteVersion + ' , ' + shadow.localVersion );
+   
+        }
         
             //The client told us what version of our edits they've received, 
             //so let's clear those from our own difflog

@@ -170,8 +170,7 @@ function userbusfunk (clientbus, conn){
             //We can see if the client lost the previous response
             //Which we can restore. Otherwise we gotta reset.
             //Step 4 in the diagram in section 4: https://neil.fraser.name/writing/sync/
-
-            if(message.remoteVersion != shadow.localVersion){
+            if(message.remoteVersion > shadow.localVersion){
                 if(backup.localVersion == message.remoteVersion){
                     //The client lost the previous response.
                     console.log('RESTORING FROM BACKUP: ' + shadow.localVersion);
@@ -214,6 +213,9 @@ function userbusfunk (clientbus, conn){
             //so let's clear those from our difflog
             difflog.edits = difflog.edits.filter( function(edit){ return edit.localVersion > message.remoteVersion } );
 
+            // //We don't need to do anything in this case - we already received this version number...
+            // if(message.remoteVersion < shadow.localVersion)
+            //     return;
 
             //Go through the list of edits and try to apply each one...
             
@@ -262,8 +264,6 @@ function userbusfunk (clientbus, conn){
         bus.cache[shadow.key] = shadow;
         bus.cache[difflog.key] = difflog;
         save(masterText)
-        console.log(masterText)
-        //bus.cache[masterText.key] = masterText; //causes loops if we use save
     }
 
 

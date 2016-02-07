@@ -172,7 +172,6 @@ function userbusfunk (clientbus, conn){
             //Step 4 in the diagram in section 4: https://neil.fraser.name/writing/sync/
 
             if(message.remoteVersion != shadow.localVersion){
-
                 if(backup.localVersion == message.remoteVersion){
                     //The client lost the previous response.
                     console.log('RESTORING FROM BACKUP: ' + shadow.localVersion);
@@ -183,14 +182,14 @@ function userbusfunk (clientbus, conn){
                     shadow.code = backup.code;
                     shadow.localVersion = backup.localVersion;
 
-                    //TODO: restore the doc from the backup.
-                    //clientbus.pub(shadow);
+                    //restore the doc from the backup.
+                    clientbus.pub({key: key, code: shadow.code, localVersion: shadow.localVersion, remoteVersion: shadow.remoteVersion});
                 }
 
-                //This case means something wonky happened 
+                //This case means wonky out-of-order stuff happened 
                 //and we should just re-send the whole doc
                 //and re-initialize.
-                else if(message.remoteVersion > shadow.localVersion){
+                else{
                     console.log('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + key );
                     shadow.code = masterText.code
                     shadow.localVersion = 0;
@@ -215,8 +214,6 @@ function userbusfunk (clientbus, conn){
             //so let's clear those from our difflog
             difflog.edits = difflog.edits.filter( function(edit){ return edit.localVersion > message.remoteVersion } );
 
-            if(message.remoteVersion < shadow.localVersion)
-                return;
 
             //Go through the list of edits and try to apply each one...
             

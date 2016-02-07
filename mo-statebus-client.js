@@ -66,9 +66,10 @@
             else
                 setTimeout(flush_outbox, 400)
         }
-        bus(prefix).on_save   = function (obj) { 
 
-            send({method: 'save', obj: obj})
+
+
+        bus(prefix).on_save   = function (obj) { send({method: 'save', obj: obj})
                                                  if (window.ignore_flashbacks)
                                                      recent_saves.push(JSON.stringify(obj))
                                                  if (recent_saves.length > 100) {
@@ -76,11 +77,16 @@
                                                      recent_saves.splice(0, extra)
                                                  }
                                                }
+
+
+
         bus(prefix).on_fetch  = function (key) { send({method: 'fetch', key: key}),
                                                  fetched_keys.add(key) }
         bus(prefix).on_forget = function (key) { send({method: 'forget', key: key}),
                                                  fetched_keys.del(key) }
         bus(prefix).on_delete = function (key) { send({method: 'delete', key: key}) }
+
+
 
         function connect () {
             console.log('[ ] trying to open')
@@ -474,7 +480,9 @@
             react: 'https://cdnjs.cloudflare.com/ajax/libs/react/0.12.2/react.js',
             sockjs: 'https://cdn.jsdelivr.net/sockjs/0.3.4/sockjs.min.js',
             statebus: 'https://dl.dropboxusercontent.com/u/1000932/libs/statebus3.1.js',
-            coffeescript: 'https://dl.dropboxusercontent.com/u/1000932/libs/coffee-script.js'
+            coffeescript: 'https://dl.dropboxusercontent.com/u/1000932/libs/coffee-script.js',
+            jsondiffpatch: '/jsondiffpatch.js',
+            google_diff_match_patch: '/google_diff_match_patch.js'
             //coffeescript: 'https://cdnjs.cloudflare.com/ajax/libs/coffee-script/1.10.0/coffee-script.min.js'
         }
         for (name in js_urls)
@@ -493,7 +501,7 @@
         window.ignore_flashbacks = true
         bus.localstorage_client('ls/*')
         bus.sockjs_client ('/*', statebus_server)
-        bus('*').on_save = function (obj) { bus.pub(obj) }
+        bus('*').on_save = function (obj) { bus.pub(obj)}
         bus('/new/*').on_save = function (o) {
             if (o.key.split('/').length > 3) return
 
@@ -503,10 +511,51 @@
             delete statebus.cache[old_key]
             save(o)
         }
+
+
+
+
         load_coffee()
         var body = window.Body || window.body || window.BODY
         if (body)
             React.render(body(), document.body)
+    }
+
+
+    function diffsync(key, fieldname){
+
+        if(fieldname === undefined)
+            fieldname = 'code'
+
+        //When the server notices changes, apply them.
+        bus.reactive(
+            function(){
+                var syncState = fetch('/' + fieldname + '/' + key);
+                saveIncomingEdits(syncState, fieldname);
+            }
+        )();
+
+        //When the client makes changes, send to the server.
+        bus.reactive(
+
+            function(){
+                var masterText = fetch(key);
+                if(masterText[fieldname] === undefined)
+                    masterText[fieldname] = '';
+                //comparing checksums to prevent loops
+                var prevchecksum = fetch('prevchecksum/' + key);
+                if(prevchecksum.checksum === undefined)
+                    prevchecksum.checksum = JSON.stringify('').hashCode();
+
+                var currchecksum = JSON.stringify(masterText[fieldname]).hashCode();
+                var hasChanged = currchecksum !== prevchecksum.checksum;
+                if(hasChanged){
+                    saveOutgoingEdits(key, fieldname);
+                }
+            }
+
+        )();
+
     }
 
     function improve_react() {
@@ -627,6 +676,8 @@
 
 
 
+
+
     function load_coffee_code (code, filename){
         // Compile coffeescript to javascript
         var compiled
@@ -669,34 +720,32 @@
 
 
     function include (codeUrl){
-        //save to this object to cue re-rendering the UI after the code changes.
-        
-        
-        bus.reactive(
-            function (){
-               codeObj = fetch(codeUrl)
+        //Including plain ol javascript.
+            diffsync(codeUrl);
+            bus.reactive(
+                function (){
+                        codeObj = fetch(codeUrl)
+                        //I don't want the code that we run to be reactive unless it's specified
+                        //This is a way to make sure that happens
+                        setTimeout(
+                            function(){
+                                //save to this object to cue re-rendering the UI after the code changes.
+                                includeobj = fetch('include')
+                                try{
+                                    if(codeObj.code)
+                                        load_coffee_code(codeObj.code, codeObj.key)
+                                }catch(err){
+                                    console.error(err)
+                                }
+
+                                save(includeobj)
+                            },
+                        0)
                 
 
-                //I don't want the code that we run to be reactive unless it's specified
-                //This is a way to make sure that happens
-                setTimeout(
-                    function(){
-                        includeobj = fetch('include')
-                        
-                        try{
-                            if(codeObj.code)
-                                load_coffee_code(codeObj.code, codeObj.key)
-                        }catch(err){
-                            console.error(err)
-                        }
-
-                        save(includeobj)
-                    },
-                0)
-
-
-            }
-        )()
+                }
+            )()
+        
     }
 
 
@@ -763,4 +812,166 @@
                 // }
             }
     }
+
+
+//DIFFERENTIAL SYNC CODE
+if (!String.prototype.startsWith) {
+    String.prototype.startsWith = function(searchString, position){
+      position = position || 0;
+      return this.substr(position, searchString.length) === searchString;
+  };
+}
+
+String.prototype.hashCode = function() {
+  var hash = 0, i, chr, len;
+  if (this.length === 0) return hash;
+  for (i = 0, len = this.length; i < len; i++) {
+    chr   = this.charCodeAt(i);
+    hash  = ((hash << 5) - hash) + chr;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return hash;
+};
+
+
+
+function saveIncomingEdits(message, fieldname){
+    
+    var key = message.key.substring(fieldname.length + 2);
+
+
+    // The main doc that is what is edited.
+    var masterText = bus.cache[key];
+
+    //The shadow copy for the current client
+    var shadow = fetch('shadow/' + key);
+
+    //A log of edits that we send to the client.
+    var difflog = fetch('difflog/' + key);
+    
+    if(masterText[fieldname] === undefined){
+        masterText[fieldname] = '';
+    }
+
+    //Initialize any of these if they don't exist
+    if(shadow[fieldname] === undefined){
+        shadow[fieldname] = '';
+        shadow.remoteVersion = 0;
+        shadow.localVersion = 0;
+
+    }
+
+    if(difflog.edits === undefined){
+        difflog.edits = [];
+    }
+
+
+    if(message.difflog === undefined){
+        //Just reset everything if we received the whole doc.
+        difflog.edits = [];
+        masterText[fieldname] = message[fieldname];
+        shadow[fieldname] = message[fieldname];
+        var version = message.remoteVersion || 0;
+        shadow.localVersion = version;
+        shadow.remoteVersion = version;
+    }
+
+
+    if(message.difflog){
+    //Remember that their local version = our remote version and vice versa.
+        
+        //Let's check if something wacky happened.
+        if(message.remoteVersion !== shadow.localVersion){
+            
+
+            //TODO: handle this case...
+            throw new Error('The diff sync version numbers dont match: ' + message.remoteVersion + ' , ' + shadow.localVersion );
+        }
+
+        
+            //The client told us what version of our edits they've received, 
+            //so let's clear those from our own difflog
+            difflog.edits = difflog.edits.filter( function(edit){ return edit.localVersion > message.remoteVersion } );
+
+
+            //Go through the list of edits and try to apply each one...
+            for(var patch in message.difflog){
+                patch = message.difflog[patch];
+
+                //If the client sent an older version, we can ignore it.
+                if(patch.localVersion === shadow.remoteVersion){
+
+                    //Now we make patches to the shadow
+                    //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
+                    shadow[fieldname] = jsondiffpatch.patch(shadow[fieldname], patch.diff)
+                    shadow.remoteVersion = patch.localVersion + 1;
+
+                    //Finally we apply patches to our master text: steps 8 and 9
+                    masterText[fieldname] = jsondiffpatch.patch(masterText[fieldname], patch.diff)
+                }
+            }
+
+            if(!message.noop){
+                save({key: '/clientdiff/' + fieldname + '/' + key, remoteVersion: shadow.remoteVersion, difflog: [], noop: true})
+            }
+    }       
+    
+
+    //save the shadow and difflog
+    bus.cache[shadow.key] = shadow;
+    bus.cache[difflog.key] = difflog;
+
+    //Compute a checksum on the doc to prevent loops.
+    var prevchecksum = fetch('prevchecksum/' + key);
+    prevchecksum.checksum = JSON.stringify(masterText[fieldname]).hashCode();
+    bus.cache[prevchecksum.key] = prevchecksum;
+
+    console.log(masterText);
+    save(masterText);
+}
+
+
+    //Let's compare a shadow for a client with our current version
+    //Returns an  object that contains the client text version
+    //along with a stack of edits that the server should apply.
+    //This also increments the server text version #, saves
+    //the stack of edits to state, and updates the shadow to
+    //reflect the current server text and it's version #.
+    function saveOutgoingEdits(key, fieldname){
+        
+        var masterText = fetch(key);
+
+        //get the shadow corresponding to this client
+        var shadow = fetch('shadow/' + key);
+
+        //Apply the diffs
+        var diff = jsondiffpatch.diff(shadow[fieldname], masterText[fieldname]);
+
+        //Add these diffs to the stack we will send
+        diff = {diff: diff, localVersion: shadow.localVersion}
+        var difflog = fetch('difflog/' + key);
+
+
+        if(difflog.edits === undefined)
+            difflog.edits = [];
+
+        difflog.edits.push( diff );
+        
+
+        //Copy the text to the shadow
+        shadow[fieldname] = masterText[fieldname];
+
+        //Increment the shadow version number
+        shadow.localVersion++;
+
+        //Save everything
+        bus.cache[shadow.key] = shadow;
+        bus.cache[difflog.key] = difflog;
+        var edits = {key: '/clientdiff/' + fieldname + '/' + key};
+        edits.remoteVersion = shadow.remoteVersion;
+        edits.difflog = difflog.edits;
+        save(edits);
+    }
+
+
 })()

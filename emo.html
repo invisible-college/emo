@@ -20,8 +20,9 @@ if not codeUrl
 	codeUrl = 'welcome'
 
 
-#If we visit /emo/blah, then let's load code at the key /code/blah
-include("/code/#{codeUrl}")
+#If we visit /emo/blah, then let's load code at the key
+
+include(codeUrl)
 
 
 
@@ -200,7 +201,7 @@ reloadCode = (node) ->
 			code.code = codeCache[node.codekey]
 			save(code)			
 
-		, 300	
+		, 50 #300	
 	)	
 
 	
@@ -277,10 +278,10 @@ setScrollOldSchool = (el) ->
 		else if y < el.y
 			el.scrollTop += y - el.y
 		
-		if el.children[prev+1].str != '\n' and prevx + (prevwidth*2) > el.x + el.width
+		if el.children[prev+1] and el.children[prev+1].str != '\n' and prevx + (prevwidth*2) > el.x + el.width
 			el.scrollLeft += prevx + (prevwidth*4) - el.x - el.width
 			
-		else if el.children[prev+1].x < el.x
+		else if el.children[prev+1] and el.children[prev+1].x < el.x
 			el.scrollLeft += el.children[prev+1].x - el.x
 
 	if el.onOldSchoolScroll
@@ -654,24 +655,23 @@ dom.CANVASEDITOR = ->
 
 	if not dom.root
 		dom.root = new R({width: @props.width, height: @props.height})
-		textarea = new R({width: @props.width - 40, height: @props.height, id: "/code/#{codeUrl}", editable: true, codekey: "/code/#{codeUrl}"})	
+		textarea = new R({width: @props.width - 40, height: @props.height, id: "#{codeUrl}", editable: true, codekey: "#{codeUrl}"})	
 		linenums = new R({width: 40, height: @props.height, id: 'linenums', fontColor: '#aaa'})
 		linenums.children.push(new STR('1'));
 		linenums.children.push(new STR('\n'));
 
 		textarea.onChange = (e) ->
-			if e.type == 'addedChildren'
-				for c in e.added
-					if c.str == '\n'
-						count = linenums.children.length  / 2 + 1
-						linenums.children.push( new STR(count.toString()) )
-						linenums.children.push( new STR('\n') )
+			linenums.children = []
+			for c in textarea.children
+				if c.str == '\n'
+					count = linenums.children.length  / 2 + 1
+					linenums.children.push( new STR(count.toString()) )
+					linenums.children.push( new STR('\n') )
+			
+			count = linenums.children.length  / 2 + 1
+			linenums.children.push( new STR(count.toString()) )
+			linenums.children.push( new STR('\n') )
 
-			else if e.type == 'deletedChildren'
-				for c in e.deleted
-					if c.str == '\n'
-						linenums.children.pop()
-						linenums.children.pop()
 
 		textarea.onOldSchoolScroll = (el) ->
 			linenums.scrollTop = el.scrollTop
@@ -721,6 +721,7 @@ dom.CANVASEDITOR = ->
 				handleMouseMove({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
 				null
 			onMouseDown: (e) =>
+				console.log(dom)
 				cursor = getCursorRelativeToCanvas(@props.id, e)
 				handleMouseDown({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
 				null
@@ -884,7 +885,7 @@ dom.CANVASEDITOR.refresh = ->
 	document.getElementById(@props.id).focus()
 
 	if not dom.root
-		dom.root = new R({width: @props.width, height: @props.height, id: "/code/#{codeUrl}", codekey: "/code/#{codeUrl}"}, null, dom)
+		dom.root = new R({width: @props.width, height: @props.height, id: "#{codeUrl}", codekey: "#{codeUrl}"}, null, dom)
 		makeStateReactive(dom.root.codekey, dom)
 	if dom.opened == undefined
 		dom.opened = false
@@ -1018,7 +1019,7 @@ dom.INCLUDE = ->
 
 
 <script>
-  statebus_server = 'http://localhost:3000'
+  statebus_server = 'http://cheeseburgertherapy.com:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

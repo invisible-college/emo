@@ -3,7 +3,8 @@ var bus = require('statebus-server')(),
     app = express(),
     fs = require('fs'),
     path = require('path'),
-    jsondiffpatch = require('jsondiffpatch')
+    jsondiffpatch = require('jsondiffpatch'),
+    dialogo = require('dialogo')
 
 // ##############
 // Setup the HTTP server
@@ -51,8 +52,10 @@ app.get('/mo-statebus-client.js', send_file('mo-statebus-client.js'))
 app.get('/emo/:codeUrl',          send_file('emo.html') )
 app.get('/jsondiffpatch.js',      send_file('jsondiffpatch.js'))
 app.get('/google_diff_match_patch.js', send_file('google_diff_match_patch.js'))
+app.get('/dialogo.js',            send_file('dialogo.js'))
 
-var clientbuses = {}
+var peers = {}
+var storage = new dialogo.Storage();
 if (!String.prototype.startsWith) {
     String.prototype.startsWith = function(searchString, position){
       position = position || 0;
@@ -60,7 +63,9 @@ if (!String.prototype.startsWith) {
   };
 }
 
-
+function copy(obj){
+    return JSON.parse(JSON.stringify(obj));
+}
 
 // we want to create a bus for each client
 // this will let us do collaborative edits
@@ -68,257 +73,39 @@ if (!String.prototype.startsWith) {
 function userbusfunk (clientbus, conn){
     // clientbus.serves_auth(conn, bus)
 
-    clientbus('/code/*').on_fetch = function (key){
+    clientbus('/serverdiffsync/*').on_fetch = function (key){
 
-        
-        if(clientbuses[key] === undefined)
-            clientbuses[key] = {}
 
-        clientbuses[key][conn.id] = clientbus;
+        if(peers[key] === undefined){
+            peers[key] = {}
+        }
 
-        setTimeout(
-            function(){
-                // The main doc of what is edited.
-                var masterText = bus.fetch('/master' + key);
+        if(peers[key][conn.id] === undefined){
+            peers[key][conn.id] = new dialogo.Peer('server/' + key);
+            var peer = peers[key][conn.id];
+            peer.storage = storage;
 
-                //The shadow copy for the current client
-                var shadowkey = 'shadow/' + conn.id + key;
-                var shadow = bus.fetch(shadowkey);
-                
-                //The backup copy in case the client loses a packet from us
-                var backup = bus.fetch('backup/' + shadowkey);
+            peer.on('message', function(message){
+                clientbus.pub({key: key, message : message);
+            });
 
-                //A log of edits that we send to the client.
-                var difflog = bus.fetch('difflog/' + shadowkey);
-
-                if(masterText.code == undefined){
-                    masterText.code = '';
-                }
-
-                shadow.code = masterText.code
-                shadow.m = 0;
-                shadow.m = 0;
-                backup.code = shadow.code;
-                backup.m = 0;
-                difflog.edits = [];
-
-                
-
-                // these cause infinite loops when using save.
-                // I think statebus is stripping client ids out of keys.
-                bus.cache[difflog.key] = difflog;
-                bus.cache[backup.key] = backup;
-                bus.cache[shadow.key] = shadow;
-                clientbus.pub({key : key, code: masterText.code, m: shadow.m, n: shadow.n});
-            },
-        0);
-       
-        //return {key : key, code: masterText.code, localVersion: shadow.localVersion, remoteVersion: shadow.remoteVersion};
+            peer.on('change', function(){
+                var cpy = peer.document.root.clone();
+                cpy.key = '/diffsync/' + cpy.key;
+                save(cpy);
+            });
+        }
     }
 
-    clientbus('/clientdiff/code/*').on_save = function(obj){
-        console.log('RECEIVING CLIENT DIFF');
-        saveIncomingEdits(obj);
+    clientbus('/clientdiffsync/*').on_save = function(syncstate){
+
+        var key = '/serverdiffsync/' + syncstate.key.substring('/clientdiffsync/'.length);
+        var peer = peers[key][conn.id];
+        if(syncstate.message){
+            peer.receive(syncstate.message);
+        }
     }
 
-    //clientbus.route_defaults_to (bus)
-
-    function saveIncomingEdits(message){
-        
-        var key = message.key.replace('/clientdiff', '');
-
-        // The main doc that is what is edited.
-        var masterText = bus.fetch('/master' + key);
-
-        var shadowkey = 'shadow/' + conn.id + key;
-        //The shadow copy for the current client
-        var shadow = bus.fetch(shadowkey);
-
-        //The backup copy in case the client loses a packet from us
-        var backup = bus.fetch('backup/' + shadowkey);
-
-        //A log of edits that we send to the client.
-        var difflog = bus.fetch('difflog/' + shadowkey)
-
-        //Initialize any of these if they don't exist
-        if(shadow.code === undefined){
-            shadow.code = '';
-            shadow.n = 0;
-            shadow.m = 0;
-        }
-
-        if(shadow.n === undefined)
-            shadow.n = 0;
-
-        if(masterText.code === undefined){
-            masterText.code = '';
-        }
-
-        if(backup.code == undefined){
-            backup.code = '';
-            backup.m = 0;
-        }
-
-        if(difflog.edits === undefined){
-            difflog.edits = [];
-        }
-
-
-        if(message.difflog){
-
-            console.log('DIFFS');
-
-            //Remember that their local version = our remote version and vice versa.
-            
-
-            //The client told us what version of our edits they've received, 
-            //so let's clear those from our difflog
-            difflog.edits = difflog.edits.filter( function(edit){ return edit.m > message.m } );
-
-            //Let's check if something wacky happened.
-            //We can see if the client lost the previous response
-            //Which we can restore. Otherwise we gotta reset.
-            //Step 4 in the diagram in section 4: https://neil.fraser.name/writing/sync/
-            if(message.m !== shadow.m){
-                if(backup.m == message.m && shadow.n == backup.m){
-                    //The client lost the previous response.
-                    console.log('RESTORING FROM BACKUP: ' + shadow.m);
-                    //We need to clear our edit history.
-                    difflog.edits = [];
-
-                    //And restore the doc from the backup.
-                    shadow.code = backup.code;
-                    shadow.m = backup.m;
-
-                    //restore the doc from the backup.
-                    clientbus.pub({key: key, code: shadow.code, m: shadow.m, n: shadow.n});
-                }
-
-                //This case means wonky out-of-order stuff happened 
-                //and we should just re-send the whole doc
-                //and re-initialize.
-                else{
-                    console.log('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + key );
-                    shadow.code = masterText.code
-                    shadow.m = 0;
-                    shadow.n = 0;
-                    backup.code = shadow.code;
-                    backup.m = shadow.m;
-                    difflog.edits = [];
-                    bus.cache[backup.key] = backup;
-                    bus.cache[shadow.key] = shadow;
-                    bus.cache[difflog.key] = difflog;
-
-                    clientbus.pub({key: key, code: shadow.code, m: shadow.m, n: shadow.n});
-                    return;
-                }
-                
-            }
-
-            
-
-        
-
-
-            // //We don't need to do anything in this case - we already received this version number...
-            // if(message.remoteVersion < shadow.localVersion)
-            //     return;
-
-            //Go through the list of edits and try to apply each one...
-            
-            for(var patch in message.difflog){
-
-                patch = message.difflog[patch];
-                console.log(patch.n + ' , ' + shadow.n);
-                //If the client sent an older version, we can ignore it.
-                if(patch.n === shadow.n){
-
-                    //Now we make patches to the shadow
-                    //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
-                    shadow.code = jsondiffpatch.patch(shadow.code, patch.diff)
-                    shadow.n++;
-                    console.log('UPDATING SHADOW VERSION N TO: ' + shadow.n)
-                    //Now we update our backup, Step 7
-                    backup.code = shadow.code;
-                    backup.m = shadow.m;
-
-                    //Finally we apply patches to our master text: steps 8 and 9
-                    masterText.code = jsondiffpatch.patch(masterText.code, patch.diff);
-                    console.log(masterText.code)
-                }
-            }
-            
-            if(!message.noop){
-                //Respond to the client...
-                clientbus.pub({key: key, n: shadow.n, difflog: [], noop: true})
-
-
-                //Update all the other clients.
-                for(var client in clientbuses[key]){
-                    
-                    var topub;
-                    if(client !== conn.id){
-                        console.log('SENDING CHANGES TO CLIENT....' + clientbuses[key][client])
-                        topub = getOutgoingEdits(client, key);
-                        clientbuses[key][client].pub(topub);
-                    }
-                }
-            }
-        }
-
-
-        //Woot, we're done...
-        bus.cache[backup.key] = backup;
-        bus.cache[shadow.key] = shadow;
-        bus.cache[difflog.key] = difflog;
-        save(masterText)
-    }
-
-
-    //Let's compare a shadow for a client with our current version
-    //Returns an  object that contains the server text version
-    //along with a stack of edits that the client should apply.
-    //This also increments the server text version #, saves
-    //the stack of edits to state, and updates the shadow to
-    //reflect the current server text and it's version #.
-    function getOutgoingEdits(clientid, key){
-        
-        //Get the server text
-        var masterText = bus.fetch('/master' + key);
-
-
-        //get the shadow corresponding to this client
-        var shadow = bus.fetch('shadow/' + clientid + key);
-
-
-        //Apply the diffs
-        var diff = jsondiffpatch.diff(shadow.code, masterText.code);
-        
-
-        //Add these diffs to the stack we will send
-        diff = {diff: diff, m: shadow.m}
-        var difflog = bus.fetch('difflog/' + shadow.key);
-
-        if(difflog.edits === undefined){
-            difflog.edits = [];
-        }
-
-
-        difflog.edits.push( diff );
-
-        //Copy the server text to the shadow
-        shadow.code = masterText.code;
-
-        //Increment the server text version number
-        shadow.m++;
-
-        //Save everything
-        bus.cache[shadow.key] = shadow;
-        bus.cache[difflog.key] = difflog;
-
-        //Return the junkin
-        return {key: key, n: shadow.n, difflog: difflog.edits}
-    }
 
 
 

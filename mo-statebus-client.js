@@ -482,7 +482,8 @@
             statebus: 'https://dl.dropboxusercontent.com/u/1000932/libs/statebus3.1.js',
             coffeescript: 'https://dl.dropboxusercontent.com/u/1000932/libs/coffee-script.js',
             jsondiffpatch: '/jsondiffpatch.js',
-            google_diff_match_patch: '/google_diff_match_patch.js'
+            google_diff_match_patch: '/google_diff_match_patch.js',
+            dialogo: '/dialogo.js'
             //coffeescript: 'https://cdnjs.cloudflare.com/ajax/libs/coffee-script/1.10.0/coffee-script.min.js'
         }
         for (name in js_urls)
@@ -521,40 +522,39 @@
             React.render(body(), document.body)
     }
 
+    var peers = {};
+    function diffsync(key){
 
-    function diffsync(key, fieldname){
+        if(peers[key] === undefined)
+            peers[key] = new dialogo.Peer('browser');
 
-        if(fieldname === undefined)
-            fieldname = 'code'
+        var peer = peers[key];
 
-        //When the server notices changes, apply them.
-        bus.reactive(
-            function(){
-                var syncState = fetch('/' + fieldname + '/' + key);
-                saveIncomingEdits(syncState, fieldname);
+        bus.reactive( function(){
+            var syncstate = fetch('/serverdiffsync/' + key);
+
+            if(syncstate.message){
+                peer.receive(syncstate.message);
             }
-        )();
+        });
 
-        //When the client makes changes, send to the server.
-        bus.reactive(
-
-            function(){
-                var masterText = fetch(key);
-                if(masterText[fieldname] === undefined)
-                    masterText[fieldname] = '';
-                //comparing checksums to prevent loops
-                var prevchecksum = fetch('prevchecksum/' + key);
-                if(prevchecksum.checksum === undefined)
-                    prevchecksum.checksum = JSON.stringify('').hashCode();
-
-                var currchecksum = JSON.stringify(masterText[fieldname]).hashCode();
-                var hasChanged = currchecksum !== prevchecksum.checksum;
-                if(hasChanged){
-                    saveOutgoingEdits(key, fieldname);
-                }
+        peer.load(key, { create: true }, function(err)){
+            if(err){
+                console.error('LOADING ERROR: ', err.toString);
+                return;
             }
 
-        )();
+            save(peer.document.root);
+            peer.on('change', function(){
+                save(peer.document.root);
+            });
+        }
+
+
+        peer.on('message', function(message){
+            save({key: '/clientdiffsync/' + key, message: message});
+        });
+
 
     }
 
@@ -814,169 +814,9 @@
     }
 
 
-//DIFFERENTIAL SYNC CODE
-if (!String.prototype.startsWith) {
-    String.prototype.startsWith = function(searchString, position){
-      position = position || 0;
-      return this.substr(position, searchString.length) === searchString;
-  };
-}
-
-String.prototype.hashCode = function() {
-  var hash = 0, i, chr, len;
-  if (this.length === 0) return hash;
-  for (i = 0, len = this.length; i < len; i++) {
-    chr   = this.charCodeAt(i);
-    hash  = ((hash << 5) - hash) + chr;
-    hash |= 0; // Convert to 32bit integer
-  }
-  return hash;
-};
 
 
 
-function saveIncomingEdits(message, fieldname){
-    
-    var key = message.key.substring(fieldname.length + 2);
-
-
-    // The main doc that is what is edited.
-    var masterText = bus.cache[key];
-
-    //The shadow copy for the current client
-    var shadow = fetch('shadow/' + key);
-
-    //A log of edits that we send to the client.
-    var difflog = fetch('difflog/' + key);
-    
-    if(masterText[fieldname] === undefined){
-        masterText[fieldname] = '';
-    }
-
-    //Initialize any of these if they don't exist
-    if(shadow[fieldname] === undefined){
-        shadow[fieldname] = '';
-        shadow.m = 0;
-        shadow.n = 0;
-
-    }
-
-    if(difflog.edits === undefined){
-        difflog.edits = [];
-    }
-
-
-    if(message.difflog === undefined){
-        //Just reset everything if we received the whole doc.
-        difflog.edits = [];
-        masterText[fieldname] = message[fieldname];
-        shadow[fieldname] = message[fieldname];
-        var version = message.n || 0;
-        shadow.n = version;
-        shadow.m = version;
-    }
-
-
-    if(message.difflog){
-    //Remember that their local version = our remote version and vice versa.
-        
-
-            //The client told us what version of our edits they've received, 
-            //so let's clear those from our own difflog
-            difflog.edits = difflog.edits.filter( function(edit){ return edit.n > message.n } );
-
-            //Let's check if something wacky happened.
-            if(message.n < shadow.n){
-                //This edit is stale, so we can ignore it...
-                //TODO: still unsure of what to do here.
-                console.log('STALE STALE THINGY')
-               return;
-            }
-
-            else if(message.n > shadow.n){
-                 //TODO: handle this case...
-                throw new Error('The diff sync version numbers dont match: ' + message.n + ' , ' + shadow.n );
-       
-            }
-
-            //Go through the list of edits and try to apply each one...
-            for(var patch in message.difflog){
-                patch = message.difflog[patch];
-
-                //If the client sent an older version, we can ignore it.
-
-                if(patch.m === shadow.m){
-
-                    //Now we make patches to the shadow
-                    //The flip side of steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
-                    shadow[fieldname] = jsondiffpatch.patch(shadow[fieldname], patch.diff)
-                    shadow.m++;
-
-                    //Finally we apply patches to our master text: steps 8 and 9
-                    masterText[fieldname] = jsondiffpatch.patch(masterText[fieldname], patch.diff)
-                    console.log(patch);
-                }
-            }
-
-            if(!message.noop){
-                save({key: '/clientdiff/' + fieldname + '/' + key, m: shadow.m, difflog: [], noop: true})
-            }
-    }       
-    
-
-    //save the shadow and difflog
-    bus.cache[shadow.key] = shadow;
-    bus.cache[difflog.key] = difflog;
-
-    //Compute a checksum on the doc to prevent loops.
-    var prevchecksum = fetch('prevchecksum/' + key);
-    prevchecksum.checksum = JSON.stringify(masterText[fieldname]).hashCode();
-    bus.cache[prevchecksum.key] = prevchecksum;
-    save(masterText);
-}
-
-
-    //Let's compare a shadow for a client with our current version
-    //Returns an  object that contains the client text version
-    //along with a stack of edits that the server should apply.
-    //This also increments the server text version #, saves
-    //the stack of edits to state, and updates the shadow to
-    //reflect the current server text and it's version #.
-    function saveOutgoingEdits(key, fieldname){
-        
-        var masterText = fetch(key);
-
-        //get the shadow corresponding to this client
-        var shadow = fetch('shadow/' + key);
-
-        //Apply the diffs
-        var diff = jsondiffpatch.diff(shadow[fieldname], masterText[fieldname]);
-
-        //Add these diffs to the stack we will send
-        diff = {diff: diff, n: shadow.n}
-        var difflog = fetch('difflog/' + key);
-
-
-        if(difflog.edits === undefined)
-            difflog.edits = [];
-
-        difflog.edits.push( diff );
-        
-
-        //Copy the text to the shadow
-        shadow[fieldname] = masterText[fieldname];
-
-        //Increment the shadow version number
-        shadow.n++;
-
-        //Save everything
-        bus.cache[shadow.key] = shadow;
-        bus.cache[difflog.key] = difflog;
-        var edits = {key: '/clientdiff/' + fieldname + '/' + key};
-        edits.m = shadow.m;
-        edits.difflog = difflog.edits;
-        save(edits);
-    }
 
 
 })()

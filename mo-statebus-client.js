@@ -856,8 +856,8 @@ function saveIncomingEdits(message, fieldname){
     //Initialize any of these if they don't exist
     if(shadow[fieldname] === undefined){
         shadow[fieldname] = '';
-        shadow.remoteVersion = 0;
-        shadow.localVersion = 0;
+        shadow.m = 0;
+        shadow.n = 0;
 
     }
 
@@ -871,9 +871,9 @@ function saveIncomingEdits(message, fieldname){
         difflog.edits = [];
         masterText[fieldname] = message[fieldname];
         shadow[fieldname] = message[fieldname];
-        var version = message.remoteVersion || 0;
-        shadow.localVersion = version;
-        shadow.remoteVersion = version;
+        var version = message.n || 0;
+        shadow.n = version;
+        shadow.m = version;
     }
 
 
@@ -881,20 +881,20 @@ function saveIncomingEdits(message, fieldname){
     //Remember that their local version = our remote version and vice versa.
         
 
-        
             //The client told us what version of our edits they've received, 
             //so let's clear those from our own difflog
-            difflog.edits = difflog.edits.filter( function(edit){ return edit.localVersion > message.remoteVersion } );
+            difflog.edits = difflog.edits.filter( function(edit){ return edit.n > message.n } );
 
             //Let's check if something wacky happened.
-            if(message.remoteVersion < shadow.localVersion){
+            if(message.n < shadow.n){
                 //This edit is stale, so we can ignore it...
+                //TODO: still unsure of what to do here.
                return;
             }
 
-            else if(message.remoteVersion > shadow.localVersion){
+            else if(message.n > shadow.n){
                  //TODO: handle this case...
-                throw new Error('The diff sync version numbers dont match: ' + message.remoteVersion + ' , ' + shadow.localVersion );
+                throw new Error('The diff sync version numbers dont match: ' + message.n + ' , ' + shadow.n );
        
             }
 
@@ -903,12 +903,12 @@ function saveIncomingEdits(message, fieldname){
                 patch = message.difflog[patch];
 
                 //If the client sent an older version, we can ignore it.
-                if(patch.localVersion === shadow.remoteVersion){
+                if(patch.m === shadow.m){
 
                     //Now we make patches to the shadow
-                    //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
+                    //The flip side of steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
                     shadow[fieldname] = jsondiffpatch.patch(shadow[fieldname], patch.diff)
-                    shadow.remoteVersion = patch.localVersion + 1;
+                    shadow.m++;
 
                     //Finally we apply patches to our master text: steps 8 and 9
                     masterText[fieldname] = jsondiffpatch.patch(masterText[fieldname], patch.diff)
@@ -916,7 +916,7 @@ function saveIncomingEdits(message, fieldname){
             }
 
             if(!message.noop){
-                save({key: '/clientdiff/' + fieldname + '/' + key, remoteVersion: shadow.remoteVersion, difflog: [], noop: true})
+                save({key: '/clientdiff/' + fieldname + '/' + key, m: shadow.m, difflog: [], noop: true})
             }
     }       
     
@@ -952,7 +952,7 @@ function saveIncomingEdits(message, fieldname){
         var diff = jsondiffpatch.diff(shadow[fieldname], masterText[fieldname]);
 
         //Add these diffs to the stack we will send
-        diff = {diff: diff, localVersion: shadow.localVersion}
+        diff = {diff: diff, n: shadow.n}
         var difflog = fetch('difflog/' + key);
 
 
@@ -966,13 +966,13 @@ function saveIncomingEdits(message, fieldname){
         shadow[fieldname] = masterText[fieldname];
 
         //Increment the shadow version number
-        shadow.localVersion++;
+        shadow.n++;
 
         //Save everything
         bus.cache[shadow.key] = shadow;
         bus.cache[difflog.key] = difflog;
         var edits = {key: '/clientdiff/' + fieldname + '/' + key};
-        edits.remoteVersion = shadow.remoteVersion;
+        edits.m = shadow.m;
         edits.difflog = difflog.edits;
         save(edits);
     }

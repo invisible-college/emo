@@ -96,10 +96,10 @@ function userbusfunk (clientbus, conn){
                 }
 
                 shadow.code = masterText.code
-                shadow.localVersion = 0;
-                shadow.remoteVersion = 0;
+                shadow.m = 0;
+                shadow.m = 0;
                 backup.code = shadow.code;
-                backup.localVersion = 0;
+                backup.m = 0;
                 difflog.edits = [];
 
                 
@@ -109,7 +109,7 @@ function userbusfunk (clientbus, conn){
                 bus.cache[difflog.key] = difflog;
                 bus.cache[backup.key] = backup;
                 bus.cache[shadow.key] = shadow;
-                clientbus.pub({key : key, code: masterText.code, localVersion: shadow.localVersion, remoteVersion: shadow.remoteVersion});
+                clientbus.pub({key : key, code: masterText.code, m: shadow.m, n: shadow.n});
             },
         0);
        
@@ -143,18 +143,18 @@ function userbusfunk (clientbus, conn){
         //Initialize any of these if they don't exist
         if(shadow.code === undefined){
             shadow.code = '';
-            shadow.remoteVersion = 0;
-            shadow.localVersion = 0;
+            shadow.n = 0;
+            shadow.m = 0;
         }
 
         if(masterText.code === undefined){
             masterText.code = '';
-            masterText.localVersion = 0;
+            masterText.n = 0;
         }
 
         if(backup.code == undefined){
             backup.code = '';
-            backup.localVersion = 0;
+            backup.m = 0;
         }
 
         if(difflog.edits === undefined){
@@ -164,25 +164,31 @@ function userbusfunk (clientbus, conn){
 
         if(message.difflog){
 
+
             //Remember that their local version = our remote version and vice versa.
             
+
+            //The client told us what version of our edits they've received, 
+            //so let's clear those from our difflog
+            difflog.edits = difflog.edits.filter( function(edit){ return edit.m > message.m } );
+
             //Let's check if something wacky happened.
             //We can see if the client lost the previous response
             //Which we can restore. Otherwise we gotta reset.
             //Step 4 in the diagram in section 4: https://neil.fraser.name/writing/sync/
-            if(message.remoteVersion > shadow.localVersion){
-                if(backup.localVersion == message.remoteVersion){
+            if(message.m !== shadow.m){
+                if(backup.m == message.m && shadow.n == backup.m){
                     //The client lost the previous response.
-                    console.log('RESTORING FROM BACKUP: ' + shadow.localVersion);
+                    console.log('RESTORING FROM BACKUP: ' + shadow.m);
                     //We need to clear our edit history.
                     difflog.edits = [];
 
                     //And restore the doc from the backup.
                     shadow.code = backup.code;
-                    shadow.localVersion = backup.localVersion;
+                    shadow.m = backup.m;
 
                     //restore the doc from the backup.
-                    clientbus.pub({key: key, code: shadow.code, localVersion: shadow.localVersion, remoteVersion: shadow.remoteVersion});
+                    clientbus.pub({key: key, code: shadow.code, m: shadow.m, n: shadow.n});
                 }
 
                 //This case means wonky out-of-order stuff happened 
@@ -191,16 +197,16 @@ function userbusfunk (clientbus, conn){
                 else{
                     console.log('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + key );
                     shadow.code = masterText.code
-                    shadow.localVersion = 0;
-                    shadow.remoteVersion = 0;
+                    shadow.m = 0;
+                    shadow.n = 0;
                     backup.code = shadow.code;
-                    backup.localVersion = shadow.localVersion;
+                    backup.m = shadow.m;
                     difflog.edits = [];
                     bus.cache[backup.key] = backup;
                     bus.cache[shadow.key] = shadow;
                     bus.cache[difflog.key] = difflog;
 
-                    clientbus.pub(masterText);
+                    clientbus.pub(clientbus.pub({key: key, code: shadow.code, m: shadow.m, n: shadow.n}));
                     return;
                 }
                 
@@ -209,9 +215,7 @@ function userbusfunk (clientbus, conn){
             
 
         
-            //The client told us what version of our edits they've received, 
-            //so let's clear those from our difflog
-            difflog.edits = difflog.edits.filter( function(edit){ return edit.localVersion > message.remoteVersion } );
+
 
             // //We don't need to do anything in this case - we already received this version number...
             // if(message.remoteVersion < shadow.localVersion)
@@ -223,16 +227,16 @@ function userbusfunk (clientbus, conn){
 
                 patch = message.difflog[patch];
                 //If the client sent an older version, we can ignore it.
-                if(patch.localVersion === shadow.remoteVersion){
+                if(patch.n === shadow.n){
 
                     //Now we make patches to the shadow
                     //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
                     shadow.code = jsondiffpatch.patch(shadow.code, patch.diff)
-                    shadow.remoteVersion = patch.localVersion + 1;
-                    console.log('UPDATING SHADOW VERSION TO: ' + shadow.remoteVersion)
+                    shadow.n++;
+                    console.log('UPDATING SHADOW VERSION N TO: ' + shadow.n)
                     //Now we update our backup, Step 7
                     backup.code = shadow.code;
-                    backup.localVersion = shadow.localVersion;
+                    backup.m = shadow.m;
 
                     //Finally we apply patches to our master text: steps 8 and 9
                     masterText.code = jsondiffpatch.patch(masterText.code, patch.diff);
@@ -242,7 +246,7 @@ function userbusfunk (clientbus, conn){
             
             if(!message.noop){
                 //Respond to the client...
-                clientbus.pub({key: key, remoteVersion: shadow.remoteVersion, difflog: [], noop: true})
+                clientbus.pub({key: key, n: shadow.n, difflog: [], noop: true})
 
 
                 //Update all the other clients.
@@ -287,7 +291,7 @@ function userbusfunk (clientbus, conn){
         var diff = jsondiffpatch.diff(shadow.code, masterText.code);
 
         //Add these diffs to the stack we will send
-        diff = {diff: diff, localVersion: shadow.localVersion}
+        diff = {diff: diff, m: shadow.m}
         var difflog = bus.fetch('difflog/' + shadow.key);
 
         if(difflog.edits === undefined){
@@ -301,14 +305,14 @@ function userbusfunk (clientbus, conn){
         shadow.code = masterText.code;
 
         //Increment the server text version number
-        shadow.localVersion++;
+        shadow.m++;
 
         //Save everything
         bus.cache[shadow.key] = shadow;
         bus.cache[difflog.key] = difflog;
 
         //Return the junkin
-        return {key: key, remoteVersion: shadow.remoteVersion, difflog: difflog.edits}
+        return {key: key, n: shadow.n, difflog: difflog.edits}
     }
 
 

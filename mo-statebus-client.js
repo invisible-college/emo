@@ -889,6 +889,7 @@ function saveIncomingEdits(message, fieldname){
             if(message.n < shadow.n){
                 //This edit is stale, so we can ignore it...
                 //TODO: still unsure of what to do here.
+                console.log('STALE STALE THINGY')
                return;
             }
 
@@ -903,6 +904,7 @@ function saveIncomingEdits(message, fieldname){
                 patch = message.difflog[patch];
 
                 //If the client sent an older version, we can ignore it.
+
                 if(patch.m === shadow.m){
 
                     //Now we make patches to the shadow
@@ -912,6 +914,7 @@ function saveIncomingEdits(message, fieldname){
 
                     //Finally we apply patches to our master text: steps 8 and 9
                     masterText[fieldname] = jsondiffpatch.patch(masterText[fieldname], patch.diff)
+                    console.log(patch);
                 }
             }
 
@@ -929,8 +932,6 @@ function saveIncomingEdits(message, fieldname){
     var prevchecksum = fetch('prevchecksum/' + key);
     prevchecksum.checksum = JSON.stringify(masterText[fieldname]).hashCode();
     bus.cache[prevchecksum.key] = prevchecksum;
-
-    console.log(masterText);
     save(masterText);
 }
 

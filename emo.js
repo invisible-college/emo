@@ -147,9 +147,11 @@ function userbusfunk (clientbus, conn){
             shadow.m = 0;
         }
 
+        if(shadow.n === undefined)
+            shadow.n = 0;
+
         if(masterText.code === undefined){
             masterText.code = '';
-            masterText.n = 0;
         }
 
         if(backup.code == undefined){
@@ -164,6 +166,7 @@ function userbusfunk (clientbus, conn){
 
         if(message.difflog){
 
+            console.log('DIFFS');
 
             //Remember that their local version = our remote version and vice versa.
             
@@ -206,7 +209,7 @@ function userbusfunk (clientbus, conn){
                     bus.cache[shadow.key] = shadow;
                     bus.cache[difflog.key] = difflog;
 
-                    clientbus.pub(clientbus.pub({key: key, code: shadow.code, m: shadow.m, n: shadow.n}));
+                    clientbus.pub({key: key, code: shadow.code, m: shadow.m, n: shadow.n});
                     return;
                 }
                 
@@ -226,6 +229,7 @@ function userbusfunk (clientbus, conn){
             for(var patch in message.difflog){
 
                 patch = message.difflog[patch];
+                console.log(patch.n + ' , ' + shadow.n);
                 //If the client sent an older version, we can ignore it.
                 if(patch.n === shadow.n){
 
@@ -240,7 +244,7 @@ function userbusfunk (clientbus, conn){
 
                     //Finally we apply patches to our master text: steps 8 and 9
                     masterText.code = jsondiffpatch.patch(masterText.code, patch.diff);
-                    
+                    console.log(masterText.code)
                 }
             }
             
@@ -289,6 +293,7 @@ function userbusfunk (clientbus, conn){
 
         //Apply the diffs
         var diff = jsondiffpatch.diff(shadow.code, masterText.code);
+        
 
         //Add these diffs to the stack we will send
         diff = {diff: diff, m: shadow.m}

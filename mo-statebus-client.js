@@ -523,7 +523,9 @@
     }
 
     var peers = {};
+
     function diffsync(key){
+        console.log(jsondiffpatch)
 
         if(peers[key] === undefined)
             peers[key] = new dialogo.Peer('browser');
@@ -532,23 +534,37 @@
 
         bus.reactive( function(){
             var syncstate = fetch('/serverdiffsync/' + key);
-
+            
             if(syncstate.message){
+                if(syncstate.message.noop === undefined)
+                    console.log(syncstate.message)
+                console.log('receiving message')
                 peer.receive(syncstate.message);
             }
-        });
+        })();
 
-        peer.load(key, { create: true }, function(err)){
+        bus.reactive( function() {
+            var userstate = fetch(key);
+            var delta = jsondiffpatch.diff(userstate, peer.document.root);
+            if(delta)
+                peer.document.root = bus.clone(userstate);
+        })();
+
+        peer.load(key, { create: true }, function(err){
+            console.log('loading')
             if(err){
                 console.error('LOADING ERROR: ', err.toString);
                 return;
             }
 
+            if(peer.document.root == null)
+                peer.document.root = {key : key}
             save(peer.document.root);
             peer.on('change', function(){
+                console.log(peer.document.root)
                 save(peer.document.root);
             });
-        }
+        });
 
 
         peer.on('message', function(message){
@@ -557,6 +573,8 @@
 
 
     }
+
+
 
     function improve_react() {
         function capitalize (s) {return s[0].toUpperCase() + s.slice(1)}

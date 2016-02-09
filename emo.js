@@ -3,9 +3,8 @@ var bus = require('statebus-server')(),
     app = express(),
     fs = require('fs'),
     path = require('path'),
-    jsondiffpatch = require('jsondiffpatch'),
+    jsondiffpatch = require('jsondiffpatch')
     dialogo = require('dialogo')
-
 // ##############
 // Setup the HTTP server
 
@@ -54,18 +53,25 @@ app.get('/jsondiffpatch.js',      send_file('jsondiffpatch.js'))
 app.get('/google_diff_match_patch.js', send_file('google_diff_match_patch.js'))
 app.get('/dialogo.js',            send_file('dialogo.js'))
 
+
+var dialogo = require('dialogo');
+
+
+// dialogo.documents.add('main', {
+//     mountains: 4,
+//     lake: {
+//         color: 'blue',
+//         depth: 34
+//     }
+// });
+
+// var io = require('socket.io').listen(1234);
+// dialogo.connect(io);
+
+
 var peers = {}
 var storage = new dialogo.Storage();
-if (!String.prototype.startsWith) {
-    String.prototype.startsWith = function(searchString, position){
-      position = position || 0;
-      return this.substr(position, searchString.length) === searchString;
-  };
-}
 
-function copy(obj){
-    return JSON.parse(JSON.stringify(obj));
-}
 
 // we want to create a bus for each client
 // this will let us do collaborative edits
@@ -86,30 +92,34 @@ function userbusfunk (clientbus, conn){
             peer.storage = storage;
 
             peer.on('message', function(message){
-                clientbus.pub({key: key, message : message);
+                clientbus.pub({key: key, message : message});
             });
 
             peer.on('change', function(){
-                var cpy = peer.document.root.clone();
+                var cpy = bus.clone(peer.document.root)
                 cpy.key = '/diffsync/' + cpy.key;
                 save(cpy);
             });
+
+
+            var masterDoc = bus.cache['/diffsync/' + key.substring('/serverdiffsync/'.length)];
+            if(masterDoc === undefined){
+                masterDoc = bus.clone({key : key.substring('/serverdiffsync/'.length)});
+                peer.document.root = masterDoc;
+                bus.cache['/diffsync/' + key.substring('/serverdiffsync/'.length)] = masterDoc;
+            }
+
+            clientbus.pub({ key : key , message : {document : peer.document }});
         }
     }
 
     clientbus('/clientdiffsync/*').on_save = function(syncstate){
-
+        console.log(syncstate)
+        console.log('TESTING TESTING')
         var key = '/serverdiffsync/' + syncstate.key.substring('/clientdiffsync/'.length);
         var peer = peers[key][conn.id];
         if(syncstate.message){
             peer.receive(syncstate.message);
         }
     }
-
-
-
-
- 
-
-    
 }

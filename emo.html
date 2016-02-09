@@ -218,7 +218,7 @@ makeStateReactive = (codekey, dom) ->
 
 		node = getElementById(dom.root, codekey)
 		if node
-			if nodestate.code and nodestate.code != codeCache[codekey]
+			if nodestate.code != undefined and nodestate.code != codeCache[codekey]
 				loadFromString(nodestate.code, node, dom)
 
 		)(codekey, dom)
@@ -488,6 +488,9 @@ handleKeyDown = (e, dom, node, parent) ->
 					setSelection(node, down, up)
 					renderAll(dom)
 
+				else if char == 'N'
+					toggleFakeUser(dom, node);
+
 
 			else if e.ev.metaKey
 				if char == 'A'
@@ -503,6 +506,21 @@ handleKeyDown = (e, dom, node, parent) ->
 					clipboard.plain = toReadableString(node.children, node.caret.start, node.caret.end - node.caret.start)
 					save(clipboard)
 
+
+runFake = null
+toggleFakeUser = (dom, node) ->
+	
+	if runFake == null
+		runFake = setInterval( 
+			() -> 
+				node.focused = true
+				e = { stop : false , ev : { which : Math.floor((Math.random() * 10 + 109))} }
+				handleKeyPress(e, dom, node)  
+			, 500
+		)
+	else
+		clearTimeout(runFake)
+		runFake = null
 
 handleFocus = (e, dom, node) ->
 	# console.log('not handling focus this way right now.')
@@ -721,7 +739,7 @@ dom.CANVASEDITOR = ->
 				handleMouseMove({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
 				null
 			onMouseDown: (e) =>
-				console.log(dom)
+
 				cursor = getCursorRelativeToCanvas(@props.id, e)
 				handleMouseDown({ev: e, stop: false, x: cursor.x, y: cursor.y}, dom, root)
 				null
@@ -788,8 +806,6 @@ isInViewVertical = (child, parent) ->
 		top -= 18
 	nodetop = child.y - top
 	nodeleft = child.x - left
-	if nodetop < 0
-		console.log(child.y + ' , ' + parent.y)
 	return nodetop >= 0 and nodetop < parent.height
 
 
@@ -1019,7 +1035,7 @@ dom.INCLUDE = ->
 
 
 <script>
-  statebus_server = 'http://cheeseburgertherapy.com:3000'
+  statebus_server = 'http://localhost:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

@@ -71,53 +71,56 @@ function clone(obj){
 function userbusfunk (clientbus, conn){
     // clientbus.serves_auth(conn, bus)
 
-    clientbus('/serverdiff/*').on_fetch = function (key){
+    clientbus('*').on_fetch = function (key){
 
-        var strippedKey = key.substring('/serverdiff/'.length)
+        if(key.startsWith('/serverdiff/')){
+            var strippedKey = key.substring('/serverdiff/'.length)
 
-        if(clientbuses[strippedKey] === undefined)
-            clientbuses[strippedKey] = {}
+            if(clientbuses[strippedKey] === undefined)
+                clientbuses[strippedKey] = {}
 
-        clientbuses[strippedKey][conn.id] = clientbus;
+            clientbuses[strippedKey][conn.id] = clientbus;
 
-        setTimeout(
-            function(){
-                console.log('ON FETCH')
-                // The main doc of what is edited.
-                var masterText = bus.fetch('/master/' + strippedKey);
+            setTimeout(
+                function(){
+                    
+                    // The main doc of what is edited.
+                    var masterText = bus.fetch('/master/' + strippedKey);
 
-                //The shadow copy for the current client
-                var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
-                var shadow = bus.fetch(shadowkey);
-                
-                //The backup copy in case the client loses a packet from us
-                var backup = bus.fetch('backup/' + shadowkey);
+                    //The shadow copy for the current client
+                    var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
+                    var shadow = bus.fetch(shadowkey);
+                    
+                    //The backup copy in case the client loses a packet from us
+                    var backup = bus.fetch('backup/' + shadowkey);
 
-                //A log of edits that we send to the client.
-                var difflog = bus.fetch('difflog/' + shadowkey);
+                    //A log of edits that we send to the client.
+                    var difflog = bus.fetch('difflog/' + shadowkey);
 
-                if(masterText.doc == undefined){
-                    masterText.doc = {key : strippedKey};
-                }
+                    if(masterText.doc == undefined){
+                        masterText.doc = {key : strippedKey};
+                    }
 
-                shadow.doc = clone(masterText.doc);
-                shadow.m = 0;
-                shadow.n = 0;
-                backup.doc = clone(shadow.doc);
-                backup.m = 0;
-                difflog.edits = [];
+                    shadow.doc = clone(masterText.doc);
+                    shadow.m = 0;
+                    shadow.n = 0;
+                    backup.doc = clone(shadow.doc);
+                    backup.m = 0;
+                    difflog.edits = [];
 
-                
+                    
 
-                // these cause infinite loops when using save.
-                // I think statebus is stripping client ids out of keys.
-                bus.cache[difflog.key] = difflog;
-                bus.cache[backup.key] = backup;
-                bus.cache[shadow.key] = shadow;
-                clientbus.pub({key : key, doc: masterText.doc, m: shadow.m, n: shadow.n});
-            },
-        0);
-       
+                    // these cause infinite loops when using save.
+                    // I think statebus is stripping client ids out of keys.
+                    bus.cache[difflog.key] = difflog;
+                    bus.cache[backup.key] = backup;
+                    bus.cache[shadow.key] = shadow;
+                    clientbus.pub({key : key, doc: masterText.doc, m: shadow.m, n: shadow.n});
+                },
+            0);
+       }else{
+            return bus.fetch(key);
+        }
         //return {key : key, code: masterText.code, localVersion: shadow.localVersion, remoteVersion: shadow.remoteVersion};
     }
 
@@ -269,7 +272,8 @@ function userbusfunk (clientbus, conn){
         bus.cache[backup.key] = backup;
         bus.cache[shadow.key] = shadow;
         bus.cache[difflog.key] = difflog;
-        save(masterText)
+
+        bus.save(masterText)
     }
 
 
@@ -287,23 +291,21 @@ function userbusfunk (clientbus, conn){
 
         //get the shadow corresponding to this client
         var shadow = bus.fetch('shadow/' + clientid + '/' + strippedKey);
-
-        var difflog = bus.fetch('difflog/' + shadow.key);
-
-        if(difflog.edits === undefined){
-            difflog.edits = [];
-        }
-
+        console.log(shadow)
+        console.log(masterText)
 
         //Apply the diffs
         var diff = jsondiffpatch.diff(shadow.doc, masterText.doc);
         console.log('SENDING DIFFS TO : ' + clientid)
-
         if(diff){
 
             //Add these diffs to the stack we will send
             diff = {diff: diff, m: shadow.m}
+            var difflog = bus.fetch('difflog/' + shadow.key);
 
+            if(difflog.edits === undefined){
+                difflog.edits = [];
+            }
 
 
             difflog.edits.push( diff );
@@ -319,10 +321,10 @@ function userbusfunk (clientbus, conn){
             bus.cache[difflog.key] = difflog;
 
             //Return the edits
-            var clientbus = clientbuses[strippedKey][clientid];   
+            var clientbus = clientbuses[strippedKey][clientid];
+            
+            clientbus.pub({key: '/serverdiff/' + strippedKey, n: shadow.n, difflog: difflog.edits})
         }
-
-        clientbus.pub({key: '/serverdiff/' + strippedKey, n: shadow.n, difflog: difflog.edits})
     }  
 
 }

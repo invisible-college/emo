@@ -526,22 +526,14 @@
     }
     function diffsync(key){
 
-        var isSyncing = false;
+        
 
         //When the server notices changes, apply them.
         bus.reactive(
             function(){
-                if(!isSyncing){
-
-                    isSyncing = true;
-                    var syncState = fetch('/serverdiff/' + key);
-
-                    
-                    saveIncomingEdits(syncState);
-
-                    isSyncing = false;
-
-                }
+                var syncState = fetch('/serverdiff/' + key);
+                if(syncState.doc !== undefined || syncState.difflog !== undefined)
+                    saveIncomingEdits(syncState);                
             }
         )();
 
@@ -549,22 +541,18 @@
         bus.reactive(
 
             function(){
-                if(!isSyncing){
-                    isSyncing = true;
-                    var masterText = clone(fetch(key));
-                    //comparing checksums to prevent loops
-                    var prevchecksum = fetch('prevchecksum/' + key);
-                    
-                    if(prevchecksum.checksum === undefined)
-                        prevchecksum.checksum = JSON.stringify({key : key}).hashCode();
+                var masterText = clone(fetch(key));
+                //comparing checksums to prevent loops
+                var prevchecksum = fetch('prevchecksum/' + key);
+                
+                if(prevchecksum.checksum === undefined)
+                    prevchecksum.checksum = JSON.stringify({key : key}).hashCode();
 
-                    var currchecksum = JSON.stringify(masterText).hashCode();
-                    var hasChanged = currchecksum !== prevchecksum.checksum;
+                var currchecksum = JSON.stringify(masterText).hashCode();
+                var hasChanged = currchecksum !== prevchecksum.checksum;
 
-                    if(hasChanged){
-                        saveOutgoingEdits(key);
-                    }
-                    isSyncing = false;
+                if(hasChanged){
+                    saveOutgoingEdits(key);
                 }
             }
 
@@ -907,45 +895,45 @@ function saveIncomingEdits(message){
     //Remember that their local version = our remote version and vice versa.
         
 
-            //The client told us what version of our edits they've received, 
-            //so let's clear those from our own difflog
-            difflog.edits = difflog.edits.filter( function(edit){ return edit.n > message.n } );
+        //The client told us what version of our edits they've received, 
+        //so let's clear those from our own difflog
+        difflog.edits = difflog.edits.filter( function(edit){ return edit.n > message.n } );
 
-            //Let's check if something wacky happened.
-            if(message.n < shadow.n){
-                //This edit is stale, so we can ignore it...
-                //TODO: still unsure of what to do here.
-               return;
+        //Let's check if something wacky happened.
+        if(message.n < shadow.n){
+            //This edit is stale, so we can ignore it...
+            //TODO: still unsure of what to do here.
+           return;
+        }
+
+        else if(message.n > shadow.n){
+             //TODO: handle this case...
+            throw new Error('The diff sync version numbers dont match: ' + message.n + ' , ' + shadow.n );
+   
+        }
+
+        //Go through the list of edits and try to apply each one...
+        for(var patch in message.difflog){
+            patch = message.difflog[patch];
+
+            //If the client sent an older version, we can ignore it.
+
+            if(patch.m === shadow.m){
+
+                //Now we make patches to the shadow
+                //The flip side of steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
+                shadow.doc = jsondiffpatch.patch(shadow.doc, patch.diff)
+                shadow.m++;
+
+                //Finally we apply patches to our master text: steps 8 and 9
+                masterText = jsondiffpatch.patch(masterText, patch.diff)
+                
             }
+        }
 
-            else if(message.n > shadow.n){
-                 //TODO: handle this case...
-                throw new Error('The diff sync version numbers dont match: ' + message.n + ' , ' + shadow.n );
-       
-            }
-
-            //Go through the list of edits and try to apply each one...
-            for(var patch in message.difflog){
-                patch = message.difflog[patch];
-
-                //If the client sent an older version, we can ignore it.
-
-                if(patch.m === shadow.m){
-
-                    //Now we make patches to the shadow
-                    //The flip side of steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
-                    shadow.doc = jsondiffpatch.patch(shadow.doc, patch.diff)
-                    shadow.m++;
-
-                    //Finally we apply patches to our master text: steps 8 and 9
-                    masterText = jsondiffpatch.patch(masterText, patch.diff)
-                    
-                }
-            }
-
-            if(!message.noop){
-                save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
-            }
+        if(!message.noop){
+            save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
+        }
     }       
     
 

@@ -522,7 +522,7 @@ toggleFakeUser = (dom, node) ->
 				node.focused = true
 				e = { stop : false , ev : { which : Math.floor((Math.random() * 10 + 109))} }
 				handleKeyPress(e, dom, node)  
-			, 500
+			, 100
 		)
 	else
 		clearTimeout(runFake)
@@ -1044,7 +1044,7 @@ dom.INCLUDE = ->
 
 
 <script>
-  statebus_server = 'http://cheeseburgertherapy.com:3000'
+  statebus_server = 'http://localhost:3000' //'http://cheeseburgertherapy.com:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

@@ -84,20 +84,16 @@ class R #R for 'rectangle'
 	insertChildren: (toadd, ignoreCode) ->
 		args = [@caret.start, @caret.end - @caret.start].concat(toadd)
 		@children.splice.apply(@children, args)
-
-		if not ignoreCode and @codekey
-			reloadCode(@)
 	
 		if @onChange
-			@onChange({type: 'addedChildren', added: toadd}) 
+			@onChange({type: 'addedChildren', added: toadd, node: this}) 
 
 	deleteChildren: (start, howmany, ignoreCode) ->
 		deleted = @children.splice(start, howmany)
-		if not ignoreCode and @codekey
-			reloadCode(@)
+
 
 		if @onChange
-			@onChange({type: 'deletedChildren', deleted: deleted})
+			@onChange({type: 'deletedChildren', deleted: deleted, node: this})
 
 	render: (ctx) ->
 		ctx.font = @font
@@ -188,22 +184,33 @@ class COLLAPSE extends R
 #of the text editor, so we will reset a timer
 #whenever the text changes. If the timer expires,
 #then we will reload the code based on those edits.
-reloadCodeTimeout = null
-codeCache = {}
-reloadCode = (node) ->
-	if reloadCodeTimeout
-		clearTimeout(reloadCodeTimeout)
+# reloadCodeTimeout = null
+# codeCache = {}
+# reloadCode = (node) ->
+# 	if reloadCodeTimeout
+# 		clearTimeout(reloadCodeTimeout)
 
-	reloadCodeTimeout = setTimeout( 
-		() ->
-			code = fetch(node.codekey)
-			codeCache[node.codekey] = toReadableString(node.children)
-			code.code = codeCache[node.codekey]
-			save(code)			
+# 	reloadCodeTimeout = setTimeout( 
+# 		() ->
+# 			code = fetch(node.codekey)
+# 			codeCache[node.codekey] = toReadableString(node.children)
+# 			code.code = codeCache[node.codekey]
+# 			save(code)			
 
-		, 50 #300	
-	)	
+# 		, 0 #300	
+# 	)	
 
+
+
+
+compare = (codekey, node, dom) ->
+	codestate = clone(fetch(codekey))
+	editorcode = toReadableString(node.children)
+    
+	delta = jsondiffpatch.diff(editorcode, codestate.code);
+	if delta
+		codestate.code = editorcode
+		save(codestate)
 	
 # this method reactively fetches the code that this element represents
 # if the code differs, then we assemble the node's children based on the code.
@@ -211,17 +218,16 @@ reloadCode = (node) ->
 # now suppose we insert an item via typing -> we want to update the code string
 # so that it doesn't differ - becuase this method would then cancel out those differences.
 # so on insertChildren, we want to know if we should update the code string.
-makeStateReactive = (codekey, dom) ->
-	bus.reactive( (codekey, dom) ->
+makeStateReactive = (codekey, node, dom) ->
+	bus.reactive( (codekey, node, dom) ->
 
-		nodestate = fetch(codekey)
+		codestate = clone(fetch(codekey))
+		editorcode = toReadableString(node.children)
+		delta = jsondiffpatch.diff(editorcode, codestate.code);
+		if delta
+			loadFromString(codestate.code, node, dom)
 
-		node = getElementById(dom.root, codekey)
-		if node
-			if nodestate.code != undefined and nodestate.code != codeCache[codekey]
-				loadFromString(nodestate.code, node, dom)
-
-		)(codekey, dom)
+		)(codekey, node, dom)
 
 
 
@@ -619,10 +625,10 @@ handleMouseMove = (e, state, node) ->
 # this seems to be ok so far, as long as we don't render
 # the elements that are scrolled out of view.
 renderAll = (dom) ->
-	if dom.root and dom.root.height
+	if dom.root and dom.root.height and dom.ctx
 		dom.root.x = 0
 		dom.root.y = 0
-		dom.root.layout(offscreenCtx) #we re-layout the whole dom each time.
+		dom.root.layout(dom.offscreenCtx) #we re-layout the whole dom each time.
 		dom.ctx.clearRect(0, 0, dom.root.width, dom.root.height)
 		dom.root.render(dom.ctx)
 
@@ -637,12 +643,14 @@ getCursorRelativeToCanvas = (canvasId, e) ->
 
 #Take a string and add each char to the dom element's children
 loadFromString = (str, node, dom) ->
+
 	node.children = []
-	for c in str
-		node.children.push( new STR(c) )
+	if str
+		for c in str
+			node.children.push( new STR(c) )
 
 	if node.onChange
-		node.onChange({type: 'addedChildren', added: node.children})
+		node.onChange({type: 'addedChildren', added: node.children, node: node})
 
 	renderAll(dom)
 
@@ -679,6 +687,7 @@ dom.CANVASEDITOR = ->
 		linenums.children.push(new STR('\n'));
 
 		textarea.onChange = (e) ->
+			compare(e.node.codekey, e.node, dom)
 			linenums.children = []
 			for c in textarea.children
 				if c.str == '\n'
@@ -696,7 +705,7 @@ dom.CANVASEDITOR = ->
 
 		dom.root.children.push(linenums)
 		dom.root.children.push(textarea)
-		makeStateReactive(textarea.codekey, dom)
+		makeStateReactive(textarea.codekey, textarea, dom)
 
 	if dom.opened == undefined
 		dom.opened = false
@@ -889,7 +898,7 @@ getStyle = (index, styleElements) ->
 doms = {}
 
 #This is used to render text offscreen so we can measure it's width.
-offscreenCtx = null
+
 
 #This is called if the web page wants the canvas to re-render.
 dom.CANVASEDITOR.refresh = ->
@@ -909,7 +918,7 @@ dom.CANVASEDITOR.refresh = ->
 		dom.canvasId = @props.id
 
 	root = dom.root
-	offscreenCtx = createHiDPICanvas(dom.root.width, dom.root.height, null, 'fake').getContext('2d')
+	dom.offscreenCtx = createHiDPICanvas(dom.root.width, dom.root.height, null, 'fake').getContext('2d')
 	dom.ctx = createHiDPICanvas(dom.root.width, dom.root.height, null, @props.id).getContext('2d')
 	renderAll(dom)
 

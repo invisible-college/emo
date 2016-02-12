@@ -249,22 +249,23 @@ function userbusfunk (clientbus, conn){
                 }
             }
             
-            if(!message.noop){
+            // if(!message.noop){
                 //Respond to the client...
-                clientbus.pub({key: '/serverdiff/' + strippedKey, n: shadow.n, difflog: [], noop: true})
+                saveOutgoingEdits(conn.id, strippedKey);
+                //clientbus.pub({key: '/serverdiff/' + strippedKey, n: shadow.n, difflog: [], noop: true})
 
 
-                //Update all the other clients.
-                for(var client in clientbuses[strippedKey]){
+                // //Update all the other clients.
+                // for(var client in clientbuses[strippedKey]){
                     
-                    var topub;
-                    if(client !== conn.id){
-                        console.log('SENDING CHANGES TO CLIENT....' + clientbuses[strippedKey][client])
-                        saveOutgoingEdits(client, strippedKey);
+                //     var topub;
+                //     if(client !== conn.id){
+                //         console.log('SENDING CHANGES TO CLIENT....' + clientbuses[strippedKey][client])
+                //         saveOutgoingEdits(client, strippedKey);
                         
-                    }
-                }
-            }
+                //     }
+                // }
+            // }
         }
 
 

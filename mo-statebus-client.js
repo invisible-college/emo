@@ -527,20 +527,23 @@
     function diffsync(key){
 
         
-
+        var isSyncing = false
         //When the server notices changes, apply them.
         bus.reactive(
             function(){
                 var syncState = fetch('/serverdiff/' + key);
                 if(syncState.doc !== undefined || syncState.difflog !== undefined)
-                    saveIncomingEdits(syncState);                
+                    saveIncomingEdits(syncState);               
             }
         )();
 
         //When the client makes changes, send to the server.
-        bus.reactive(
+        setInterval(
 
             function(){
+                console.log('RUNNING RUNNING RUNNING')
+                isSyncing = true;
+
                 var masterText = clone(fetch(key));
                 //comparing checksums to prevent loops
                 var prevchecksum = fetch('prevchecksum/' + key);
@@ -551,12 +554,10 @@
                 var currchecksum = JSON.stringify(masterText).hashCode();
                 var hasChanged = currchecksum !== prevchecksum.checksum;
 
-                if(hasChanged){
-                    saveOutgoingEdits(key);
-                }
+                saveOutgoingEdits(key);
             }
 
-        )();
+        , 150)//();
 
     }
 
@@ -931,9 +932,9 @@ function saveIncomingEdits(message){
             }
         }
 
-        if(!message.noop){
-            save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
-        }
+        // if(!message.noop){
+        //     save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
+        // }
     }       
     
 
@@ -1006,6 +1007,8 @@ function saveIncomingEdits(message){
 
 
             save(edits);
+        }else{
+            save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
         }
         
     }

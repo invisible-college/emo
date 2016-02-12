@@ -131,16 +131,15 @@ function userbusfunk (clientbus, conn){
     }
 
     clientbus('*').on_forget = function(key){
-        if(key.startsWith('/serverdiff/'))
+        if(key.startsWith('/serverdiff/')){
             forgetClientForDiffSync(conn.id, key.substring('/serverdiff/'.length))
-        
+        }
     }
 
     clientbus('/clientdiff/*').on_save = function(obj){
         var strippedKey = obj.key.substring('/clientdiff/'.length);
         if(!clientbuses[strippedKey] || !clientbuses[strippedKey][conn.id])
             return;
-        
         saveIncomingEdits(obj);
     }
 
@@ -179,72 +178,72 @@ function userbusfunk (clientbus, conn){
         }
 
 
-        if(message.edits){
-
-            //We can always roll things back.
-            if(message.versionAcked !== shadow.versionAcked){
-                if(backup.versionAcked == message.versionAcked && shadow.version == backup.versionAcked){
-                    //The client lost the previous response.
-                    console.log('RESTORING FROM BACKUP: ' + shadow.versionAcked);
 
 
-                    //And restore the doc from the backup.
-                    shadow.doc = clone(backup.doc);
-                    shadow.versionAcked = backup.versionAcked;
+        //We can always roll things back.
+        if(message.versionAcked !== shadow.versionAcked){
+            if(backup.versionAcked == message.versionAcked && shadow.version == backup.versionAcked){
+                //The client lost the previous response.
+                console.log('RESTORING FROM BACKUP: ' + shadow.versionAcked);
 
-                    //restore the doc from the backup.
-                    clientbus.pub({key: '/serverdiff/' + strippedKey, doc: shadow.doc, versionAcked: shadow.versionAcked, version: shadow.version});
-                }
 
-                //This case means wonky out-of-order stuff happened 
-                //and we should just re-send the whole doc
-                //and re-initialize.
-                else{
-                    console.log('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + strippedKey );
-                    console.log(message.versionAcked + ' , ' + shadow.versionAcked)
-                    shadow.doc = clone(masterText.doc);
-                    shadow.versionAcked = 0;
-                    shadow.version = 0;
-                    backup.doc = clone(shadow.doc);
-                    backup.versionAcked = shadow.versionAcked;
-                    bus.cache[backup.key] = backup;
-                    bus.cache[shadow.key] = shadow;
+                //And restore the doc from the backup.
+                shadow.doc = clone(backup.doc);
+                shadow.versionAcked = backup.versionAcked;
 
-                    clientbus.pub({key: '/serverdiff/' + strippedKey, doc: shadow.doc, versionAcked: shadow.versionAcked, version: shadow.version});
-                    return;
-                }
-                
+                //restore the doc from the backup.
+                clientbus.pub({key: '/serverdiff/' + strippedKey, doc: shadow.doc, versionAcked: shadow.versionAcked, version: shadow.version});
             }
 
-            // //We don't need to do anything in this case - we already received this version number...
-            // if(message.remoteVersion < shadow.localVersion)
-            //     return;
-
-            //Go through the list of edits and try to apply each one...
-            
-
-            //If the client sent an older version, we can ignore it.
-            if(message.edits.version === shadow.version){
-
-                //Now we make patches to the shadow
-                //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
-                shadow.doc = jsondiffpatch.patch(shadow.doc, message.edits.diff)
-                shadow.version++;
-                console.log('UPDATING SHADOW VERSION N TO: ' + shadow.version)
-                //Now we update our backup, Step 7
+            //This case means wonky out-of-order stuff happened 
+            //and we should just re-send the whole doc
+            //and re-initialize.
+            else{
+                console.log('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + strippedKey );
+                console.log(message.versionAcked + ' , ' + shadow.versionAcked)
+                shadow.doc = clone(masterText.doc);
+                shadow.versionAcked = 0;
+                shadow.version = 0;
                 backup.doc = clone(shadow.doc);
                 backup.versionAcked = shadow.versionAcked;
+                bus.cache[backup.key] = backup;
+                bus.cache[shadow.key] = shadow;
 
-                //Finally we apply patches to our master text: steps 8 and 9
-                masterText.doc = jsondiffpatch.patch(masterText.doc, message.edits.diff);
-               
+                clientbus.pub({key: '/serverdiff/' + strippedKey, doc: shadow.doc, versionAcked: shadow.versionAcked, version: shadow.version});
+                return;
             }
             
-
-            saveOutgoingEdits(conn.id, strippedKey);
-
         }
 
+        // //We don't need to do anything in this case - we already received this version number...
+        // if(message.remoteVersion < shadow.localVersion)
+        //     return;
+
+        //Go through the list of edits and try to apply each one...
+        
+
+        //If the client sent an older version, we can ignore it.
+        if(message.version === shadow.version){
+
+            //Now we make patches to the shadow
+            //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
+            shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
+            shadow.version++;
+            console.log('UPDATING SHADOW VERSION N TO: ' + shadow.version)
+            //Now we update our backup, Step 7
+            backup.doc = clone(shadow.doc);
+            backup.versionAcked = shadow.versionAcked;
+
+            //Finally we apply patches to our master text: steps 8 and 9
+            masterText.doc = jsondiffpatch.patch(masterText.doc, message.diff);
+           
+        }
+        
+        
+
+        saveOutgoingEdits(conn.id, strippedKey);
+
+    
 
         //Woot, we're done...
         bus.cache[backup.key] = backup;
@@ -275,8 +274,12 @@ function userbusfunk (clientbus, conn){
         var diff = jsondiffpatch.diff(shadow.doc, masterText.doc);
         
         if(diff){
+            var message = {key: '/serverdiff/' + strippedKey}
+            message.versionAcked = shadow.versionAcked;
+            message.version = shadow.version;
+
             //Add these diffs to the stack we will send
-            diff = {diff: diff, versionAcked: shadow.versionAcked}
+            message.diff = diff;
 
             //Copy the server text to the shadow
             shadow.doc = clone(masterText.doc);
@@ -290,7 +293,7 @@ function userbusfunk (clientbus, conn){
             //Return the edits
             var clientbus = clientbuses[strippedKey][clientid];
             
-            clientbus.pub({key: '/serverdiff/' + strippedKey, version: shadow.version, edits: diff})
+            clientbus.pub(message)
         }
     }  
 

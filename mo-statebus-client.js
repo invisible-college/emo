@@ -521,33 +521,7 @@
             React.render(body(), document.body)
     }
 
-    function clone(obj){
-        return JSON.parse(JSON.stringify(obj))
-    }
-    function diffsync(key){
 
-        
-        var isSyncing = false
-        //When the server notices changes, apply them.
-        bus.reactive(
-            function(){
-                var syncState = fetch('/serverdiff/' + key);
-                if(syncState.doc !== undefined || syncState.edits !== undefined)
-                    saveIncomingEdits(syncState);               
-            }
-        )();
-
-        //When the client makes changes, send to the server.
-        setInterval(
-
-            function(){
-
-                saveOutgoingEdits(key);
-            }
-
-        , 150)//();
-
-    }
 
     function improve_react() {
         function capitalize (s) {return s[0].toUpperCase() + s.slice(1)}
@@ -806,6 +780,26 @@
 
 
 //DIFFERENTIAL SYNC CODE
+    function clone(obj){
+        return JSON.parse(JSON.stringify(obj))
+    }
+    function diffsync(key){
+
+        
+        var isSyncing = false
+        //When the server notices changes, apply them.
+        bus.reactive(
+            function(){
+                var syncState = fetch('/serverdiff/' + key);
+                saveIncomingEdits(syncState);               
+            }
+        )();
+
+        //When the client makes changes, send to the server.
+        setInterval( function(){ saveOutgoingEdits(key); } , 150);
+
+    }
+
 if (!String.prototype.startsWith) {
     String.prototype.startsWith = function(searchString, position){
       position = position || 0;
@@ -813,26 +807,6 @@ if (!String.prototype.startsWith) {
   };
 }
 
-if(!String.prototype.hashCode) {
-    String.prototype.hashCode = function(){
-       
-        var hash = 0;
-        
-        if (this.length === 0)
-            return hash;
-        
-      for (var i = 0, len = this.length; i < len; i++) {
-
-        var chr   = this.charCodeAt(i);
-
-        hash  = ((hash << 5) - hash) + chr;
-        hash |= 0; // Convert to 32bit integer
-      }
-
-      
-        return hash;
-    }
-};
 
 
 
@@ -871,7 +845,7 @@ function saveIncomingEdits(message){
         shadow.versionAcked = message.versionAcked;
     }
 
-    if(message.edits){
+    else{
         
 
         //This edit is stale, so we can ignore it...
@@ -882,14 +856,14 @@ function saveIncomingEdits(message){
             throw new Error('The diff sync version numbers dont match: ' + message.version + ' , ' + shadow.version );
    
         
-        if(message.edits.versionAcked === shadow.versionAcked){
-
+        if(message.versionAcked === shadow.versionAcked){
+            console.log(message)
             //Now we make patches to the shadow
-            shadow.doc = jsondiffpatch.patch(shadow.doc, message.edits.diff)
+            shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
             shadow.versionAcked++;
 
             //Finally we apply patches to our master text: steps 8 and 9
-            masterText = jsondiffpatch.patch(masterText, message.edits.diff)
+            masterText = jsondiffpatch.patch(masterText, message.diff)
             
         }
     }       
@@ -897,14 +871,7 @@ function saveIncomingEdits(message){
 
     //save the shadow
     bus.cache[shadow.key] = shadow;
-    
-    //Compute a checksum on the doc to prevent loops.
-    var str = JSON.stringify(masterText)
-    var prevchecksum = fetch('prevchecksum/' + key);
-    prevchecksum.checksum = str.hashCode();
 
-    
-    bus.cache[prevchecksum.key] = prevchecksum;
 
     save(masterText);
 }
@@ -937,10 +904,11 @@ function saveIncomingEdits(message){
         //Apply the diffs
         var diff = jsondiffpatch.diff(shadow.doc, masterText);
         if(diff){
+            var edits = {key: '/clientdiff/' + key};
 
             //Add these diffs to the stack we will send
-            diff = {diff: diff, version: shadow.version}
-            
+            edits.diff = diff
+            edits.version = shadow.version
             
 
             //Copy the text to the shadow
@@ -951,14 +919,13 @@ function saveIncomingEdits(message){
 
             //Save everything
             bus.cache[shadow.key] = shadow;
-            var edits = {key: '/clientdiff/' + key};
-            edits.versionAcked = shadow.versionAcked;
-            edits.edits = diff;
+                        edits.versionAcked = shadow.versionAcked;
+            edits.diff = diff;
 
 
             save(edits);
         }else{
-            save({key: '/clientdiff/' + key, versionAcked: shadow.versionAcked, edits: {}, noop: true})
+            save({key: '/clientdiff/' + key, versionAcked: shadow.versionAcked})
         }
         
     }

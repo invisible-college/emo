@@ -208,9 +208,10 @@ compare = (codekey, node, dom) ->
 	editorcode = toReadableString(node.children)
     
 	delta = jsondiffpatch.diff(editorcode, codestate.code);
-	if delta
+	if delta and codestate.code != undefined
 		codestate.code = editorcode
 		save(codestate)
+		console.log('SAVING CODE STATE')
 	
 # this method reactively fetches the code that this element represents
 # if the code differs, then we assemble the node's children based on the code.

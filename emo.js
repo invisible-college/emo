@@ -100,7 +100,10 @@ function userbusfunk (clientbus, conn){
                     //The shadow copy for the current client
                     var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
                     var shadow = bus.fetch(shadowkey);
-                    
+
+                    var editHistory = bus.fetch('edits/' + shadowkey);
+                    if(editHistory.history === undefined)
+                        editHistory.history = [];                    
 
                     if(masterText.doc == undefined){
                         masterText.doc = {key : strippedKey};
@@ -110,7 +113,8 @@ function userbusfunk (clientbus, conn){
                     shadow.versionAcked = 0;
                     shadow.version = 0;
 
-                    
+                    if(editHistory.history.length > 0)
+                        shadow.versionAcked = editHistory.history[editHistory.history.length - 1].versionAcked;
 
                     // these cause infinite loops when using save.
                     // I think statebus is stripping client ids out of keys.
@@ -165,7 +169,7 @@ function userbusfunk (clientbus, conn){
             masterText.doc = {key : strippedKey};
         }
 
-        var editHistory = bus.fetch('/edits/' + shadowkey);
+        var editHistory = bus.fetch('edits/' + shadowkey);
         if(editHistory.history === undefined)
             editHistory.history = [];
 

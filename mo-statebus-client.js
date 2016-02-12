@@ -786,21 +786,31 @@
     function diffsync(key){
 
         
-        var isSyncing = false
         //When the server notices changes, apply them.
-        bus.reactive(
+        var receive = bus.reactive(
             function(){
                 var syncState = fetch('/serverdiff/' + key);
-                saveIncomingEdits(syncState);               
+                if(!receive.is_loading())
+                    saveIncomingEdits(syncState);
+                else
+                    console.log(syncState)               
             }
-        )();
+        );
 
+        
         //When the client makes changes, send to the server.
-        bus.reactive( function(){ 
-            var doc = fetch(key);
-            saveOutgoingEdits(key); 
-        } )();
+        var send = bus.reactive( function(){ 
 
+            var doc = fetch(key);
+            if(!send.is_loading())
+                saveOutgoingEdits(key);
+            else
+                console.log('YO YO YO')
+
+        } );
+
+        receive();
+        send();
     }
 
 if (!String.prototype.startsWith) {
@@ -849,8 +859,7 @@ function saveIncomingEdits(message){
     }
 
     else{
-        
-
+    
         //This edit is stale, so we can ignore it...
         if(message.version < shadow.version)
            return;
@@ -889,7 +898,6 @@ function saveIncomingEdits(message){
         //get the shadow corresponding to this client
         var shadow = fetch('shadow/' + key);
 
-
         //Initialize any of these if they don't exist
         if(shadow.doc === undefined){
             shadow.doc = clone(masterText);
@@ -897,8 +905,6 @@ function saveIncomingEdits(message){
             shadow.version = 0;
 
         }
-
-
 
         //Apply the diffs
         var diff = jsondiffpatch.diff(shadow.doc, masterText);

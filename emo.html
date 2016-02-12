@@ -526,7 +526,7 @@ toggleFakeUser = (dom, node) ->
 				node.focused = true
 				e = { stop : false , ev : { which : Math.floor((Math.random() * 10 + 109))} }
 				handleKeyPress(e, dom, node)  
-			, 100
+			, 50
 		)
 	else
 		clearTimeout(runFake)

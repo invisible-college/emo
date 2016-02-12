@@ -102,8 +102,7 @@ function userbusfunk (clientbus, conn){
                     var shadow = bus.fetch(shadowkey);
 
                     var editHistory = bus.fetch('edits/' + shadowkey);
-                    if(editHistory.history === undefined)
-                        editHistory.history = [];                    
+                    editHistory.history = [];
 
                     if(masterText.doc == undefined){
                         masterText.doc = {key : strippedKey};
@@ -113,12 +112,12 @@ function userbusfunk (clientbus, conn){
                     shadow.versionAcked = 0;
                     shadow.version = 0;
 
-                    if(editHistory.history.length > 0)
-                        shadow.versionAcked = editHistory.history[editHistory.history.length - 1].versionAcked;
+                    
 
                     // these cause infinite loops when using save.
                     // I think statebus is stripping client ids out of keys.
                     bus.cache[shadow.key] = shadow;
+                    bus.cache[editHistory.key] = editHistory;
                     clientbus.pub({key : key, doc: masterText.doc, versionAcked: shadow.versionAcked, version: shadow.version});
                 },
             0);
@@ -176,42 +175,45 @@ function userbusfunk (clientbus, conn){
         //If client is trying to provide edits but haven't received an ack.
         //This probably means client and server had edits in flight at the same time.
         if(message.versionAcked < shadow.versionAcked){
+            console.log('RESTORING RESTORING RESTORING!: ' + message.versionAcked);
 
             //Rolling back...
             var restored = clone(shadow);
-            for(var i = editHistory.history.length - 1; i >= 0; i--){
-                
-                var edit = editHistory.history[i];
-                if(edit.versionAcked >= message.versionAcked)
-                    restored = jsondiffpatch.unpatch(restored, edit.diff);
-                else
-                    break;
+            var couldRestore = false;
 
+            var history = editHistory.history;
+            while(history.length > 0 && history[history.length - 1].versionAcked >= message.versionAcked){
+                var edit = history.pop()
+                restored = jsondiffpatch.unpatch(restored, edit.diff);
+                couldRestore = true;
             }
 
-            console.log('Restoring from edit history: ' + shadow.versionAcked);
+            // if(!couldRestore){
+            //     console.log(message.versionAcked + ' , ' + shadow.versionAcked);
+            //     console.log(message.version + ' , ' + shadow.version)
+            //     console.log(history[history.length - 1].versionAcked)
+            //     throw new Error('COULD NOT RESTORE')
+            // }
+            
             shadow.doc = restored.doc;
             shadow.versionAcked = message.versionAcked;
         }
 
-            // //This case means wonky out-of-order stuff happened 
-            // //and we should just re-send the whole doc and re-initialize.
-            // else{
-            //     throw new Error('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + strippedKey + '\nversionAcked in message : ' + message.versionAcked + ' , ' + 'versionAcked in shadow : ' + shadow.versionAcked  );
-            // }
-            
         
 
         //If the client sent an older version, we can ignore it.
         if(message.version === shadow.version){
 
             //Now we make patches to the shadow
-            //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
             shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
             shadow.version++;
             //Save our edit history...
-            if(message.diff)
-                editHistory.history.push({diff: message.diff, versionAcked: message.versionAcked});
+            if(message.diff){
+                console.log('PUSHING EDITS')
+                editHistory.history.push({diff: message.diff, versionAcked: message.versionAcked + 1});
+            }else{
+                throw new Error('NO DIFF')
+            }
 
             //Finally we apply patches to our master text: steps 8 and 9
             masterText.doc = jsondiffpatch.patch(masterText.doc, message.diff);

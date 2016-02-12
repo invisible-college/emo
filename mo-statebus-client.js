@@ -791,9 +791,7 @@
             function(){
                 var syncState = fetch('/serverdiff/' + key);
                 if(!receive.is_loading())
-                    saveIncomingEdits(syncState);
-                else
-                    console.log(syncState)               
+                    saveIncomingEdits(syncState);             
             }
         );
 
@@ -804,8 +802,6 @@
             var doc = fetch(key);
             if(!send.is_loading())
                 saveOutgoingEdits(key);
-            else
-                console.log('YO YO YO')
 
         } );
 
@@ -869,12 +865,12 @@ function saveIncomingEdits(message){
    
         
         if(message.versionAcked === shadow.versionAcked){
-            console.log(message)
+            console.log('updating version acked')
             //Now we make patches to the shadow
             shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
             shadow.versionAcked++;
 
-            //Finally we apply patches to our master text: steps 8 and 9
+            //Finally we apply patches to our master text
             masterText = jsondiffpatch.patch(masterText, message.diff)
             
         }
@@ -928,9 +924,9 @@ function saveIncomingEdits(message){
 
 
             save(edits);
-        }else{
-            save({key: '/clientdiff/' + key, versionAcked: shadow.versionAcked})
-        }
+        }//else{
+         //   save({key: '/clientdiff/' + key, versionAcked: shadow.versionAcked})
+        //}
         
     }
 

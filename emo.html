@@ -208,10 +208,10 @@ compare = (codekey, node, dom) ->
 	editorcode = toReadableString(node.children)
     
 	delta = jsondiffpatch.diff(editorcode, codestate.code);
-	if delta and codestate.code != undefined
+	if delta and delta[0]
+		console.log(delta)
 		codestate.code = editorcode
 		save(codestate)
-		console.log('SAVING CODE STATE')
 	
 # this method reactively fetches the code that this element represents
 # if the code differs, then we assemble the node's children based on the code.
@@ -1046,7 +1046,7 @@ dom.INCLUDE = ->
 
 <script>
   statebus_server = 'http://cheeseburgertherapy.com:3000'
-
+  //statebus_server = 'http://localhost:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

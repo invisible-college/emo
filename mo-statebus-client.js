@@ -532,7 +532,7 @@
         bus.reactive(
             function(){
                 var syncState = fetch('/serverdiff/' + key);
-                if(syncState.doc !== undefined || syncState.difflog !== undefined)
+                if(syncState.doc !== undefined || syncState.edits !== undefined)
                     saveIncomingEdits(syncState);               
             }
         )();
@@ -541,18 +541,6 @@
         setInterval(
 
             function(){
-                console.log('RUNNING RUNNING RUNNING')
-                isSyncing = true;
-
-                var masterText = clone(fetch(key));
-                //comparing checksums to prevent loops
-                var prevchecksum = fetch('prevchecksum/' + key);
-                
-                if(prevchecksum.checksum === undefined)
-                    prevchecksum.checksum = JSON.stringify({key : key}).hashCode();
-
-                var currchecksum = JSON.stringify(masterText).hashCode();
-                var hasChanged = currchecksum !== prevchecksum.checksum;
 
                 saveOutgoingEdits(key);
             }
@@ -865,82 +853,50 @@ function saveIncomingEdits(message){
     //The shadow copy for the current client
     var shadow = fetch('shadow/' + key);
 
-    //A log of edits that we send to the client.
-    var difflog = fetch('difflog/' + key);
 
-
-    //Initialize any of these if they don't exist
+    //Initialize the shadow if it hasn't been yet.
     if(shadow.doc === undefined){
         shadow.doc = clone(masterText);
-        shadow.m = 0;
-        shadow.n = 0;
+        shadow.versionAcked = 0;
+        shadow.version = 0;
 
     }
 
-    if(difflog.edits === undefined){
-        difflog.edits = [];
-    }
-
-
-    if(message.difflog === undefined && message.doc !== undefined){
-        //Just reset everything if we received the whole doc.
-        difflog.edits = [];
+    //Just reset everything if we received the whole doc.
+    if(message.doc !== undefined){
         masterText = message.doc;
         shadow.doc = clone(message.doc);
-        var version = message.n || 0;
-        shadow.n = version;
-        shadow.m = message.m || 0;
+        var version = message.version;
+        shadow.version = version;
+        shadow.versionAcked = message.versionAcked;
     }
 
-    if(message.difflog){
-    //Remember that their local version = our remote version and vice versa.
+    if(message.edits){
         
 
-        //The client told us what version of our edits they've received, 
-        //so let's clear those from our own difflog
-        difflog.edits = difflog.edits.filter( function(edit){ return edit.n > message.n } );
-
-        //Let's check if something wacky happened.
-        if(message.n < shadow.n){
-            //This edit is stale, so we can ignore it...
-            //TODO: still unsure of what to do here.
+        //This edit is stale, so we can ignore it...
+        if(message.version < shadow.version)
            return;
-        }
-
-        else if(message.n > shadow.n){
-             //TODO: handle this case...
-            throw new Error('The diff sync version numbers dont match: ' + message.n + ' , ' + shadow.n );
+        
+        if(message.version > shadow.version)
+            throw new Error('The diff sync version numbers dont match: ' + message.version + ' , ' + shadow.version );
    
+        
+        if(message.edits.versionAcked === shadow.versionAcked){
+
+            //Now we make patches to the shadow
+            shadow.doc = jsondiffpatch.patch(shadow.doc, message.edits.diff)
+            shadow.versionAcked++;
+
+            //Finally we apply patches to our master text: steps 8 and 9
+            masterText = jsondiffpatch.patch(masterText, message.edits.diff)
+            
         }
-
-        //Go through the list of edits and try to apply each one...
-        for(var patch in message.difflog){
-            patch = message.difflog[patch];
-
-            //If the client sent an older version, we can ignore it.
-
-            if(patch.m === shadow.m){
-
-                //Now we make patches to the shadow
-                //The flip side of steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
-                shadow.doc = jsondiffpatch.patch(shadow.doc, patch.diff)
-                shadow.m++;
-
-                //Finally we apply patches to our master text: steps 8 and 9
-                masterText = jsondiffpatch.patch(masterText, patch.diff)
-                
-            }
-        }
-
-        // if(!message.noop){
-        //     save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
-        // }
     }       
     
 
-    //save the shadow and difflog
+    //save the shadow
     bus.cache[shadow.key] = shadow;
-    bus.cache[difflog.key] = difflog;
     
     //Compute a checksum on the doc to prevent loops.
     var str = JSON.stringify(masterText)
@@ -971,44 +927,38 @@ function saveIncomingEdits(message){
         //Initialize any of these if they don't exist
         if(shadow.doc === undefined){
             shadow.doc = clone(masterText);
-            shadow.m = 0;
-            shadow.n = 0;
+            shadow.versionAcked = 0;
+            shadow.version = 0;
 
         }
 
-        var difflog = fetch('difflog/' + key);
-        if(difflog.edits === undefined){
-            difflog.edits = [];
-        }
+
 
         //Apply the diffs
         var diff = jsondiffpatch.diff(shadow.doc, masterText);
         if(diff){
 
             //Add these diffs to the stack we will send
-            diff = {diff: diff, n: shadow.n}
+            diff = {diff: diff, version: shadow.version}
             
-
-            difflog.edits.push( diff );
             
 
             //Copy the text to the shadow
             shadow.doc = clone(masterText);
 
             //Increment the shadow version number
-            shadow.n++;
+            shadow.version++;
 
             //Save everything
             bus.cache[shadow.key] = shadow;
-            bus.cache[difflog.key] = difflog;
             var edits = {key: '/clientdiff/' + key};
-            edits.m = shadow.m;
-            edits.difflog = difflog.edits;
+            edits.versionAcked = shadow.versionAcked;
+            edits.edits = diff;
 
 
             save(edits);
         }else{
-            save({key: '/clientdiff/' + key, m: shadow.m, difflog: [], noop: true})
+            save({key: '/clientdiff/' + key, versionAcked: shadow.versionAcked, edits: {}, noop: true})
         }
         
     }

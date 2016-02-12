@@ -101,9 +101,6 @@ function userbusfunk (clientbus, conn){
                     var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
                     var shadow = bus.fetch(shadowkey);
                     
-                    //The backup copy in case the client loses a packet from us
-                    var backup = bus.fetch('backup/' + shadowkey);
-
 
                     if(masterText.doc == undefined){
                         masterText.doc = {key : strippedKey};
@@ -112,14 +109,11 @@ function userbusfunk (clientbus, conn){
                     shadow.doc = clone(masterText.doc);
                     shadow.versionAcked = 0;
                     shadow.version = 0;
-                    backup.doc = clone(shadow.doc);
-                    backup.versionAcked = 0;
 
                     
 
                     // these cause infinite loops when using save.
                     // I think statebus is stripping client ids out of keys.
-                    bus.cache[backup.key] = backup;
                     bus.cache[shadow.key] = shadow;
                     clientbus.pub({key : key, doc: masterText.doc, versionAcked: shadow.versionAcked, version: shadow.version});
                 },
@@ -157,8 +151,7 @@ function userbusfunk (clientbus, conn){
         //The shadow copy for the current client
         var shadow = bus.fetch(shadowkey);
 
-        //The backup copy in case the client loses a packet from us
-        var backup = bus.fetch('backup/' + shadowkey);
+
 
 
         //Initialize any of these if they don't exist
@@ -172,54 +165,37 @@ function userbusfunk (clientbus, conn){
             masterText.doc = {key : strippedKey};
         }
 
-        if(backup.doc == undefined){
-            backup.doc = {key : strippedKey};
-            backup.versionAcked = 0;
+        var editHistory = bus.fetch('/edits/' + shadowkey);
+        if(editHistory.history === undefined)
+            editHistory.history = [];
+
+        //If client is trying to provide edits but haven't received an ack.
+        //This probably means client and server had edits in flight at the same time.
+        if(message.versionAcked < shadow.versionAcked){
+
+            //Rolling back...
+            var restored = clone(shadow);
+            for(var i = editHistory.history.length - 1; i >= 0; i--){
+                
+                var edit = editHistory.history[i];
+                if(edit.versionAcked >= message.versionAcked)
+                    restored = jsondiffpatch.unpatch(restored, edit.diff);
+                else
+                    break;
+
+            }
+
+            console.log('Restoring from edit history: ' + shadow.versionAcked);
+            shadow.doc = restored.doc;
+            shadow.versionAcked = message.versionAcked;
         }
 
-
-
-
-        //We can always roll things back.
-        if(message.versionAcked !== shadow.versionAcked){
-            if(backup.versionAcked == message.versionAcked && shadow.version == backup.versionAcked){
-                //The client lost the previous response.
-                console.log('RESTORING FROM BACKUP: ' + shadow.versionAcked);
-
-
-                //And restore the doc from the backup.
-                shadow.doc = clone(backup.doc);
-                shadow.versionAcked = backup.versionAcked;
-
-                //restore the doc from the backup.
-                clientbus.pub({key: '/serverdiff/' + strippedKey, doc: shadow.doc, versionAcked: shadow.versionAcked, version: shadow.version});
-            }
-
-            //This case means wonky out-of-order stuff happened 
-            //and we should just re-send the whole doc
-            //and re-initialize.
-            else{
-                console.log('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + strippedKey );
-                console.log(message.versionAcked + ' , ' + shadow.versionAcked)
-                shadow.doc = clone(masterText.doc);
-                shadow.versionAcked = 0;
-                shadow.version = 0;
-                backup.doc = clone(shadow.doc);
-                backup.versionAcked = shadow.versionAcked;
-                bus.cache[backup.key] = backup;
-                bus.cache[shadow.key] = shadow;
-
-                clientbus.pub({key: '/serverdiff/' + strippedKey, doc: shadow.doc, versionAcked: shadow.versionAcked, version: shadow.version});
-                return;
-            }
+            // //This case means wonky out-of-order stuff happened 
+            // //and we should just re-send the whole doc and re-initialize.
+            // else{
+            //     throw new Error('Docs were out of sync for : ' + conn.id + '\n' + 'The doc id is : ' + strippedKey + '\nversionAcked in message : ' + message.versionAcked + ' , ' + 'versionAcked in shadow : ' + shadow.versionAcked  );
+            // }
             
-        }
-
-        // //We don't need to do anything in this case - we already received this version number...
-        // if(message.remoteVersion < shadow.localVersion)
-        //     return;
-
-        //Go through the list of edits and try to apply each one...
         
 
         //If the client sent an older version, we can ignore it.
@@ -229,26 +205,24 @@ function userbusfunk (clientbus, conn){
             //Steps 5a, 5b, and 6 in section 4: https://neil.fraser.name/writing/sync/
             shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
             shadow.version++;
-            console.log('UPDATING SHADOW VERSION N TO: ' + shadow.version)
-            //Now we update our backup, Step 7
-            backup.doc = clone(shadow.doc);
-            backup.versionAcked = shadow.versionAcked;
+            //Save our edit history...
+            if(message.diff)
+                editHistory.history.push({diff: message.diff, versionAcked: message.versionAcked});
 
             //Finally we apply patches to our master text: steps 8 and 9
             masterText.doc = jsondiffpatch.patch(masterText.doc, message.diff);
            
         }
         
+        for(var clientid in clientbuses[strippedKey]){
+            saveOutgoingEdits(clientid, strippedKey);
+        }
         
 
-        saveOutgoingEdits(conn.id, strippedKey);
-
     
-
         //Woot, we're done...
-        bus.cache[backup.key] = backup;
         bus.cache[shadow.key] = shadow;
-
+        bus.save(editHistory)
         bus.save(masterText)
     }
 

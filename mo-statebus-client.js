@@ -796,7 +796,10 @@
         )();
 
         //When the client makes changes, send to the server.
-        setInterval( function(){ saveOutgoingEdits(key); } , 150);
+        bus.reactive( function(){ 
+            var doc = fetch(key);
+            saveOutgoingEdits(key); 
+        } )();
 
     }
 
@@ -868,11 +871,7 @@ function saveIncomingEdits(message){
         }
     }       
     
-
-    //save the shadow
     bus.cache[shadow.key] = shadow;
-
-
     save(masterText);
 }
 
@@ -919,8 +918,7 @@ function saveIncomingEdits(message){
 
             //Save everything
             bus.cache[shadow.key] = shadow;
-                        edits.versionAcked = shadow.versionAcked;
-            edits.diff = diff;
+            edits.versionAcked = shadow.versionAcked;
 
 
             save(edits);

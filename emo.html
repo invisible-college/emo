@@ -205,11 +205,14 @@ class COLLAPSE extends R
 
 compare = (codekey, node, dom) ->
 	codestate = clone(fetch(codekey))
+	if codestate.code == undefined
+		codestate.code = ''
+
 	editorcode = toReadableString(node.children)
-    
+   
 	delta = jsondiffpatch.diff(editorcode, codestate.code);
-	if delta and delta[0]
-		console.log(delta)
+
+	if delta
 		codestate.code = editorcode
 		save(codestate)
 	

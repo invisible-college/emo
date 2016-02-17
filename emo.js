@@ -228,7 +228,7 @@ function userbusfunk (clientbus, conn){
             console.log('AFTER')
             console.log(masterText.doc)
             bus.cache[shadow.key] = shadow;
-            bus.cache[masterText.key] = masterText;
+            save(masterText)
         }
         
         for(var clientid in clientbuses[strippedKey]){

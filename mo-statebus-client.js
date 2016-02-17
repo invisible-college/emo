@@ -779,10 +779,11 @@
     }
 
 
-//DIFFERENTIAL SYNC CODE
+    //DIFFERENTIAL SYNC CODE
     function clone(obj){
         return JSON.parse(JSON.stringify(obj))
     }
+
     function diffsync(key){
 
         
@@ -791,7 +792,7 @@
             function(){
                 var syncState = fetch('/serverdiff/' + key);
                 if(!receive.is_loading())
-                    saveIncomingEdits(syncState);             
+                    saveIncomingEdits(syncState);            
             }
         );
 
@@ -809,14 +810,6 @@
         send();
     }
 
-if (!String.prototype.startsWith) {
-    String.prototype.startsWith = function(searchString, position){
-      position = position || 0;
-      return this.substr(position, searchString.length) === searchString;
-  };
-}
-
-
 
 
 function saveIncomingEdits(message){
@@ -825,59 +818,53 @@ function saveIncomingEdits(message){
 
 
     // The main doc that is what is edited.
-    var masterText = bus.cache[key];
-    if(masterText === undefined){
-        masterText = { key : key }
+    var shared = bus.cache[key];
 
-    }
-
-    masterText = clone(masterText);
 
     //The shadow copy for the current client
-    var shadow = fetch('shadow/' + key);
+    var shadow = bus.cache['shadow/' + key];
 
-
-    //Initialize the shadow if it hasn't been yet.
-    if(shadow.doc === undefined){
-        shadow.doc = clone(masterText);
-        shadow.versionAcked = 0;
-        shadow.version = 0;
-
-    }
 
     //Just reset everything if we received the whole doc.
     if(message.doc !== undefined){
-        masterText = message.doc;
+        shared = clone(message.doc);
+        shared.key = key;
+        shadow = {key : 'shadow/' + key};
         shadow.doc = clone(message.doc);
-        var version = message.version;
-        shadow.version = version;
-        shadow.versionAcked = message.versionAcked;
+        console.log('SETTING SHADOW IN SAVE OUT')
+        var version = message.clientVersion;
+        shadow.clientVersion = version;
+        shadow.serverVersion = message.serverVersion;
+        bus.cache[shadow.key] = shadow;
+        save(shared)
     }
 
     else{
     
         //This edit is stale, so we can ignore it...
-        if(message.version < shadow.version)
+        if(message.clientVersion < shadow.clientVersion)
            return;
         
-        if(message.version > shadow.version)
-            throw new Error('The diff sync version numbers dont match: ' + message.version + ' , ' + shadow.version );
+        //This should not happen.
+        if(message.clientVersion > shadow.clientVersion)
+            throw new Error('The diff sync version numbers dont match: ' + message.clientVersion + ' , ' + shadow.clientVersion );
    
-        
-        if(message.versionAcked === shadow.versionAcked){
-            console.log('updating version acked')
+        //This is what is expected.
+        if(message.serverVersion === shadow.serverVersion){
             //Now we make patches to the shadow
             shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
-            shadow.versionAcked++;
+            shadow.serverVersion++;
 
-            //Finally we apply patches to our master text
-            masterText = jsondiffpatch.patch(masterText, message.diff)
-            
+            delete shared.key
+            //Finally we apply best effort fuzzy patch to the shared doc
+            shared = jsondiffpatch.patch(shared, message.diff)
+            bus.cache[shadow.key] = shadow;
+            shared.key = key;
+            save(shared)
+            //TODO - these patches should be in try catch blocks
+            // and if the patch fails, the doc should reload.
         }
     }       
-    
-    bus.cache[shadow.key] = shadow;
-    save(masterText);
 }
 
 
@@ -889,45 +876,49 @@ function saveIncomingEdits(message){
     //reflect the current server text and it's version #.
     function saveOutgoingEdits(key){
         
-        var masterText = fetch(key);
-
+        var shared = fetch(key);
+        delete shared.key
         //get the shadow corresponding to this client
         var shadow = fetch('shadow/' + key);
+        console.log(shadow.doc)
+        console.log(shared)
 
         //Initialize any of these if they don't exist
         if(shadow.doc === undefined){
-            shadow.doc = clone(masterText);
-            shadow.versionAcked = 0;
-            shadow.version = 0;
-
+            shadow.doc = clone(shared);
+            shadow.serverVersion = 0;
+            shadow.clientVersion = 0;
+            console.log('SETTING SHADOW')
+            bus.cache[shadow.key] = shadow;
         }
 
         //Apply the diffs
-        var diff = jsondiffpatch.diff(shadow.doc, masterText);
+
+        var diff = jsondiffpatch.diff(shadow.doc, shared);
+        
         if(diff){
+
             var edits = {key: '/clientdiff/' + key};
 
             //Add these diffs to the stack we will send
             edits.diff = diff
-            edits.version = shadow.version
+            edits.clientVersion = shadow.clientVersion
             
 
             //Copy the text to the shadow
-            shadow.doc = clone(masterText);
+            shadow.doc = clone(shared);
 
             //Increment the shadow version number
-            shadow.version++;
+            shadow.clientVersion++;
 
             //Save everything
             bus.cache[shadow.key] = shadow;
-            edits.versionAcked = shadow.versionAcked;
+            edits.serverVersion = shadow.serverVersion;
 
-
+            console.log(edits)
             save(edits);
-        }//else{
-         //   save({key: '/clientdiff/' + key, versionAcked: shadow.versionAcked})
-        //}
-        
+        }
+        shared.key = key;
     }
 
 

@@ -15,9 +15,10 @@ window.getLastItemInPath = ->
 	lastItem = subs[subs.length - 1].split("?")[0]
 	return lastItem
 
-codeUrl = getLastItemInPath()
+me = create_id().toString()
+codeUrl = 'diffsync/' + getLastItemInPath()
 if not codeUrl
-	codeUrl = 'welcome'
+	codeUrl = 'diffsync/welcome'
 
 
 #If we visit /emo/blah, then let's load code at the key
@@ -59,7 +60,7 @@ document.addEventListener('paste', (e) ->
 		renderAll(dom)
 )
 
-
+fontColors = ['red', 'yellow', 'orange', 'white', 'pink']
 #Our special canvas-based render tree
 class R #R for 'rectangle'
 	constructor: (args) ->
@@ -70,7 +71,7 @@ class R #R for 'rectangle'
 				@[a] = args[a]
 
 		#initialize some default fields
-		if not @caret       then @caret = {start: 0, end: 0, up: 0, down: 0}
+		if not @caret       then @caret = {start: 0, end: 0, up: 0, down: 0, color: fontColors[Math.floor(Math.random() * fontColors.length)]}
 		if not @children    then @children = []
 		if not @scrollTop   then @scrollTop = 0
 		if not @scrollLeft  then @scrollLeft = 0
@@ -98,10 +99,22 @@ class R #R for 'rectangle'
 	render: (ctx) ->
 		ctx.font = @font
 		
+
+		carets = if @codekey then fetch('/cursors/' + @codekey) else {}
+		if not carets.cursors
+			carets.cursors = {}
+			carets.cursors[me] = clone(@caret)
+
+		if @codekey and not carets.cursors[me] or carets.cursors[me].start != @caret.start
+			carets.cursors[me] = @caret
+			save(carets)
+
 		#if the caret is at the beginning render it
-		if @editable and @caret.start == 0
-			ctx.fillStyle = @caretColor
-			ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop, 1, @lineHeight)
+		if @editable
+			for c of carets.cursors
+				if carets.cursors[c].start == 0
+					ctx.fillStyle = carets.cursors[c].color
+					ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop, 1, @lineHeight)
 
 
 		for child, index in @children
@@ -116,9 +129,11 @@ class R #R for 'rectangle'
 			child.render(ctx)
 
 			# render the caret after this child if it comes next
-			if @editable and index == @caret.start - 1
-				ctx.fillStyle = @caretColor
-				ctx.fillRect(child.x + child.width, child.y + 3 , 1, @lineHeight)
+			if @editable
+				for c of carets.cursors
+					if index == carets.cursors[c].start - 1
+						ctx.fillStyle = carets.cursors[c].color
+						ctx.fillRect(child.x + child.width, child.y + 3 , 1, @lineHeight)
 
 		#render the border
 		if @border
@@ -210,30 +225,66 @@ compare = (codekey, node, dom) ->
 
 	editorcode = toReadableString(node.children)
    
-	delta = jsondiffpatch.diff(editorcode, codestate.code);
+	delta = bus.diffPatcher.diff(editorcode, codestate.code)
 
 	if delta
 		codestate.code = editorcode
 		save(codestate)
-	
+
+
+getCursorFromDelta = (delta, cursorPos) ->
+
+	originalCursorPos = cursorPos
+	lines = delta[0].split('\n')
+	start = 0
+	end = 0
+	digits = /-(\d+),(\d+) \+(\d+),(\d+)/g
+	for l in lines
+		l = decodeURIComponent(l)
+		if l.startsWith('@@') and l.endsWith('@@')
+			match = digits.exec(l)
+			start = parseInt(match[1])
+			end = parseInt(match[2])
+		else if l.startsWith('+') and start <= originalCursorPos
+			cursorPos += l.length - 1
+		else if l.startsWith('-') and start + l.length - 1 < originalCursorPos
+			start += l.length - 1
+			cursorPos -= l.length - 1
+		else if l.startsWith(' ')
+			start += l.length - 1
+		else if l.startsWith('-') and start < originalCursorPos
+			cursorPos = start
+		# else if l.startsWith('+') and start < originalCursorPos
+		# 	cursorPos += l.length - 1
+	return cursorPos
+
 # this method reactively fetches the code that this element represents
 # if the code differs, then we assemble the node's children based on the code.
 # eventually we'll use virtual doms to do this the right way.
-# now suppose we insert an item via typing -> we want to update the code string
-# so that it doesn't differ - becuase this method would then cancel out those differences.
-# so on insertChildren, we want to know if we should update the code string.
 makeStateReactive = (codekey, node, dom) ->
 	bus.reactive( (codekey, node, dom) ->
-
-		codestate = clone(fetch(codekey))
+		codestate = fetch(codekey)
 		editorcode = toReadableString(node.children)
-		delta = jsondiffpatch.diff(editorcode, codestate.code);
+		delta = bus.diffPatcher.diff(editorcode, codestate.code);
 		if delta
 			loadFromString(codestate.code, node, dom)
-
+			cursorPos = getCursorFromDelta(delta, node.caret.start)
+			setSelection(node, cursorPos, cursorPos)
+			renderAll(dom)
 		)(codekey, node, dom)
 
+	bus.reactive( (codeUrl, node, dom) ->
+		cursorstate = fetch('/cursors/' + codeUrl)
+		if not cursorstate.cursors
+			cursorstate.cursors = {}
+			cursorstate.cursors[me] = clone(node.caret)
 
+		if not cursorstate.cursors[me] or cursorstate.cursors[me].start != node.caret.start
+			cursorstate.cursors[me] = clone(node.caret)
+			save(cursorstate)
+
+		renderAll(dom)
+		)(codekey, node, dom)
 
 ## DOM OPERATIONS ---- TO BE MOVED AS METHODS OF DOM OBJECT
 insertStr = (str, node, dom, ignoreCode) ->
@@ -263,6 +314,9 @@ setSelection = (el, down, up) ->
 
 
 	setScrollOldSchool(el)
+
+	if el.onCursorChanged
+		el.onCursorChanged(el)
 
 
 #OLD SCHOOL CONSOLE SCROLLING. 
@@ -656,8 +710,6 @@ loadFromString = (str, node, dom) ->
 	if node.onChange
 		node.onChange({type: 'addedChildren', added: node.children, node: node})
 
-	renderAll(dom)
-
 #If someone typed include('...') then
 #we put a widget in for editing that code
 updateIncludes = (dom, node) ->
@@ -676,6 +728,18 @@ updateIncludes = (dom, node) ->
 				makeStateReactive(includer.codekey, dom)
 
 
+
+
+# registerCursor = (diffsyncKey) ->
+# 	window.addEventListener('beforeunload', (e) ->
+# 		key = '' + diffsyncKey
+# 		cursorstate = fetch(key)
+# 		windowstate = fetch('window')
+# 		windowstate.closing = true
+# 		save(windowstate)
+# 		delete cursorstate.cursors[me]
+# 		save(cursorstate)
+# 	)
 
 #The canvas dom element that will render the text editor
 dom.CANVASEDITOR = ->
@@ -707,9 +771,13 @@ dom.CANVASEDITOR = ->
 		textarea.onOldSchoolScroll = (el) ->
 			linenums.scrollTop = el.scrollTop
 
+
+
+
 		dom.root.children.push(linenums)
 		dom.root.children.push(textarea)
 		makeStateReactive(textarea.codekey, textarea, dom)
+
 
 	if dom.opened == undefined
 		dom.opened = false
@@ -721,6 +789,10 @@ dom.CANVASEDITOR = ->
 	root = dom.root
 
 	updateIncludes(dom, root)
+
+
+
+
 	DIV null,
 
 		CANVAS
@@ -1048,8 +1120,8 @@ dom.INCLUDE = ->
 
 
 <script>
-  statebus_server = 'http://cheeseburgertherapy.com:3000'
-  //statebus_server = 'http://localhost:3000'
+  //statebus_server = 'http://cheeseburgertherapy.com:3000'
+  statebus_server = 'http://localhost:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

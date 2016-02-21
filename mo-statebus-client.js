@@ -516,6 +516,7 @@
 
 
         load_coffee()
+        setupDiffSync();
         var body = window.Body || window.body || window.BODY
         if (body)
             React.render(body(), document.body)
@@ -686,7 +687,8 @@
 
     function include (codeUrl){
         //Including plain ol javascript.
-            diffsync(codeUrl);
+        
+            // diffsync(codeUrl);
             bus.reactive(
                 function (){
                         codeObj = fetch(codeUrl)
@@ -778,38 +780,36 @@
             }
     }
 
+//DIFFERENTIAL SYNC CODE
+function clone(obj){
+    return JSON.parse(JSON.stringify(obj))
+}
 
-    //DIFFERENTIAL SYNC CODE
-    function clone(obj){
-        return JSON.parse(JSON.stringify(obj))
+
+
+
+function setupDiffSync(){
+    
+    bus.diffPatcher = new jsondiffpatch.create({textDiff : {minLength : 1}});
+
+
+    bus('diffsync/*').on_fetch = function(key){ 
+        
+       //Fetch the whole doc and then start syncing with the client.
+        fetch('/serverdiff/' + key, saveIncomingEdits);
+
+    
+        if(bus.cache[key] === undefined)
+            return {key : key}
+
+        return bus.cache[key];
     }
 
-    function diffsync(key){
-
-        
-        //When the server notices changes, apply them.
-        var receive = bus.reactive(
-            function(){
-                var syncState = fetch('/serverdiff/' + key);
-                if(!receive.is_loading())
-                    saveIncomingEdits(syncState);            
-            }
-        );
-
-        
-        //When the client makes changes, send to the server.
-        var send = bus.reactive( function(){ 
-
-            var doc = fetch(key);
-            if(!send.is_loading())
-                saveOutgoingEdits(key);
-
-        } );
-
-        receive();
-        send();
+    bus('diffsync/*').on_forget = function(key){
+        forget('/serverdiff/' + key);
+        forget('/clientdiff/' + key);
     }
-
+}
 
 
 function saveIncomingEdits(message){
@@ -819,52 +819,46 @@ function saveIncomingEdits(message){
 
     // The main doc that is what is edited.
     var shared = bus.cache[key];
+    if(shared === undefined){
+        shared = { key : key }
 
+    }
+
+    shared = clone(shared);
+    delete shared.key
 
     //The shadow copy for the current client
-    var shadow = bus.cache['shadow/' + key];
+    var shadow = fetch('shadow/' + key);
 
+
+    //Initialize the shadow if it hasn't been yet.
+    if(shadow.doc === undefined){
+        shadow.doc = clone(shared);
+    }
 
     //Just reset everything if we received the whole doc.
     if(message.doc !== undefined){
-        shared = clone(message.doc);
-        shared.key = key;
-        shadow = {key : 'shadow/' + key};
+        shared = message.doc;
         shadow.doc = clone(message.doc);
-        console.log('SETTING SHADOW IN SAVE OUT')
-        var version = message.clientVersion;
-        shadow.clientVersion = version;
-        shadow.serverVersion = message.serverVersion;
-        bus.cache[shadow.key] = shadow;
-        save(shared)
+        shared.key = key;
+        save(shared);
     }
 
-    else{
-    
-        //This edit is stale, so we can ignore it...
-        if(message.clientVersion < shadow.clientVersion)
-           return;
-        
-        //This should not happen.
-        if(message.clientVersion > shadow.clientVersion)
-            throw new Error('The diff sync version numbers dont match: ' + message.clientVersion + ' , ' + shadow.clientVersion );
-   
-        //This is what is expected.
-        if(message.serverVersion === shadow.serverVersion){
-            //Now we make patches to the shadow
-            shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
-            shadow.serverVersion++;
-
-            delete shared.key
-            //Finally we apply best effort fuzzy patch to the shared doc
-            shared = jsondiffpatch.patch(shared, message.diff)
-            bus.cache[shadow.key] = shadow;
-            shared.key = key;
-            save(shared)
-            //TODO - these patches should be in try catch blocks
-            // and if the patch fails, the doc should reload.
-        }
+    else if(message.diff){
+        shadow.doc = bus.diffPatcher.patch(shadow.doc, message.diff)
+        shared = bus.diffPatcher.patch(shared, message.diff)
+        shared.key = key;
+        save(shared);
     }       
+    
+
+    //save the shadow
+    bus.cache[shadow.key] = shadow;
+
+    //When the client makes changes, send to the server.
+    //TODO: make the response timeout dynamic
+    setTimeout( function(){ saveOutgoingEdits(key); } , 150);
+    
 }
 
 
@@ -880,44 +874,32 @@ function saveIncomingEdits(message){
         delete shared.key
         //get the shadow corresponding to this client
         var shadow = fetch('shadow/' + key);
-        console.log(shadow.doc)
-        console.log(shared)
+
 
         //Initialize any of these if they don't exist
         if(shadow.doc === undefined){
             shadow.doc = clone(shared);
-            shadow.serverVersion = 0;
-            shadow.clientVersion = 0;
-            console.log('SETTING SHADOW')
-            bus.cache[shadow.key] = shadow;
+
         }
 
+
         //Apply the diffs
-
-        var diff = jsondiffpatch.diff(shadow.doc, shared);
-        
+        var diff = bus.diffPatcher.diff(shadow.doc, shared);
+        var edits = {key: '/clientdiff/' + key};
         if(diff){
-
-            var edits = {key: '/clientdiff/' + key};
-
+            
             //Add these diffs to the stack we will send
             edits.diff = diff
-            edits.clientVersion = shadow.clientVersion
             
-
             //Copy the text to the shadow
             shadow.doc = clone(shared);
 
-            //Increment the shadow version number
-            shadow.clientVersion++;
-
             //Save everything
             bus.cache[shadow.key] = shadow;
-            edits.serverVersion = shadow.serverVersion;
+            edits.diff = diff;
 
-            console.log(edits)
-            save(edits);
         }
+        save(edits);
         shared.key = key;
     }
 

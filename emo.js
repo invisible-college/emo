@@ -78,6 +78,9 @@ function forgetClientForDiffSync(clientid, diffsynckey){
     delete clientbuses[diffsynckey][clientid];
 }
 
+
+bus.diffPatcher = new jsondiffpatch.create({textDiff : {minLength : 1}});
+
 // we want to create a bus for each client
 // this will let us do collaborative edits
 // cuz we can keep a shadow for each client
@@ -88,44 +91,55 @@ function userbusfunk (clientbus, conn){
 
         if(key.startsWith('/serverdiff/')){
             var strippedKey = key.substring('/serverdiff/'.length)
+
             rememberClientForDiffSync(conn.id, clientbus, strippedKey);
 
             setTimeout(
                 function(){
                     
                     // The main doc of what is edited.
-                    var masterText = bus.fetch('/master/' + strippedKey);
+                    var shared = bus.fetch('/' + strippedKey);
 
                     //The shadow copy for the current client
                     var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
                     var shadow = bus.fetch(shadowkey);
+                    
 
-                    if(masterText.doc == undefined){
-                        masterText.doc = {};
-                        bus.cache[masterText.key] = masterText;
+
+                    if(shared.doc == undefined){
+                        shared.doc = {key : strippedKey};
                     }
 
-                    shadow.doc = clone(masterText.doc);
-                    shadow.serverVersion = 0;
-                    shadow.clientVersion = 0;
-
-
-                    
+                    shadow.doc = clone(shared.doc);
 
                     // these cause infinite loops when using save.
                     // I think statebus is stripping client ids out of keys.
                     bus.cache[shadow.key] = shadow;
-                    clientbus.pub({key : key, doc: masterText.doc, serverVersion: shadow.serverVersion, clientVersion: shadow.clientVersion});
+                    clientbus.pub({key : key, doc: shared.doc});
                 },
             0);
-       }else
-            return bus.fetch(key);
-       
+       }else{
+            return bus.fetch(key)
+        }
+
     }
 
     clientbus('*').on_forget = function(key){
         if(key.startsWith('/serverdiff/')){
             forgetClientForDiffSync(conn.id, key.substring('/serverdiff/'.length))
+        }else if(key.startsWith('/cursors/')){
+            var cursors = fetch(key);
+            if(cursors.cursors){
+                delete cursors.cursors
+                save(cursors);
+            }
+        }
+    }
+
+
+    clientbus('*').on_save = function(obj){
+        if(!obj.key.startsWith('/clientdiff/')){
+            bus.save(obj)
         }
     }
 
@@ -133,28 +147,17 @@ function userbusfunk (clientbus, conn){
         var strippedKey = obj.key.substring('/clientdiff/'.length);
         if(!clientbuses[strippedKey] || !clientbuses[strippedKey][conn.id])
             return;
-
-
         saveIncomingEdits(obj);
-        
     }
 
-    clientbus('/master/*').on_save = function(obj){
-        console.log('WTF');
-        bus.save(obj);
-    }
 
-    //clientbus.route_defaults_to (bus)
 
     function saveIncomingEdits(message){
         
         var strippedKey = message.key.substring('/clientdiff/'.length);
 
         // The main doc that is what is edited.
-        var masterText = bus.fetch('/master/' + strippedKey);
-
-        console.log('BEFORE')
-        console.log(masterText.doc)
+        var shared = bus.fetch('/' + strippedKey);
 
         var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
 
@@ -164,77 +167,26 @@ function userbusfunk (clientbus, conn){
 
         //Initialize any of these if they don't exist
         if(shadow.doc === undefined){
-            shadow.doc = {};
-            shadow.clientVersion = 0;
-            shadow.serverVersion = 0;
+            shadow.doc = {key : strippedKey};
         }
 
-        if(masterText.doc === undefined){
-            masterText.doc = {};
+        if(shared.doc === undefined){
+            shared.doc = {key : strippedKey};
+            bus.save(shared)
         }
 
-        var editHistory = bus.fetch('edits/' + shadowkey);
-        if(editHistory.history === undefined)
-            editHistory.history = [];
 
-        //If client is trying to provide edits but haven't received an ack.
-        //This probably means client and server had edits in flight at the same time.
-        if(message.serverVersion < shadow.serverVersion){
-            
-
-            //Rolling back...
-            var restored = clone(shadow);
-            var couldRestore = false;
-
-            var history = editHistory.history;
-
-            //There should always be history??
-            while(history.length > 0 && history[history.length - 1].serverVersion >= message.serverVersion){
-
-                var edit = history.pop()
-                restored.doc = jsondiffpatch.unpatch(restored.doc, edit.diff);
-                couldRestore = true;
-            }
-            
-
-            if(!couldRestore){
-                console.log(message.serverVersion + ' , ' + shadow.serverVersion);
-                console.log(message.clientVersion + ' , ' + shadow.clientVersion)
-                console.log(history[history.length - 1].serverVersion)
-                throw new Error('COULD NOT RESTORE')
-            }
-            
-            shadow.doc = restored.doc;
-            shadow.serverVersion = message.serverVersion;
-            shadow.clientVersion = message.clientVersion;
-
-            bus.cache[shadow.key] = shadow;
-            bus.cache[editHistory.key] = editHistory;
-        }
-
-        
-
-        
-        if(message.clientVersion === shadow.clientVersion){
-
-            //Now we make patches to the shadow
-            shadow.doc = jsondiffpatch.patch(shadow.doc, message.diff)
-            shadow.clientVersion++;
-
-            //Finally we apply patches to our master text: steps 8 and 9
-            console.log('BEFORE')
-            console.log(masterText.doc)
-            masterText.doc = jsondiffpatch.patch(masterText.doc, message.diff);
-            console.log('AFTER')
-            console.log(masterText.doc)
-            bus.cache[shadow.key] = shadow;
-            save(masterText)
+        //If the client sent an older version, we can ignore it.
+        if(message.diff){
+            shadow.doc = bus.diffPatcher.patch(shadow.doc, message.diff)
+            shared.doc = bus.diffPatcher.patch(shared.doc, message.diff)
+            bus.save(shared)
         }
         
-        for(var clientid in clientbuses[strippedKey]){
-            saveOutgoingEdits(clientid, strippedKey);
-        }
-
+        
+        bus.cache[shadow.key] = shadow;
+        
+        saveOutgoingEdits(conn.id, strippedKey);
     }
 
 
@@ -248,46 +200,32 @@ function userbusfunk (clientbus, conn){
 
 
         //Get the server text
-        var masterText = bus.fetch('/master/' + strippedKey);
-
+        var shared = bus.fetch('/' + strippedKey);
 
         //get the shadow corresponding to this client
         var shadow = bus.fetch('shadow/' + clientid + '/' + strippedKey);
 
-        //get the edits that we make in case we need to roll back.
-        var editHistory = bus.fetch('edits/' + shadow.key);
-        if(editHistory.history === undefined)
-            editHistory.history = [];
-            
-
         //Apply the diffs
-        var diff = jsondiffpatch.diff(shadow.doc, masterText.doc);
+        var diff = bus.diffPatcher.diff(shadow.doc, shared.doc);
         
+        //Return the edits
+        var clientbus = clientbuses[strippedKey][clientid];
+        var message = {key: '/serverdiff/' + strippedKey}
+
         if(diff){
-            var message = {key: '/serverdiff/' + strippedKey}
-            message.serverVersion = shadow.serverVersion;
-            message.clientVersion = shadow.clientVersion;
-
-            //Update the edit history
-            editHistory.history.push({diff: message.diff, serverVersion: message.serverVersion});
-
-            //Increment the server text version number
-            shadow.serverVersion++;
 
             //Add these diffs to the stack we will send
             message.diff = diff;
 
             //Copy the server text to the shadow
-            shadow.doc = clone(masterText.doc);
+            shadow.doc = clone(shared.doc);
 
             //Save everything
             bus.cache[shadow.key] = shadow;
-            bus.cache[editHistory.key] = editHistory;
-            //Return the edits
-            var clientbus = clientbuses[strippedKey][clientid];
 
-            clientbus.pub(message)
         }
+
+        clientbus.pub(message)
     }  
 
 }

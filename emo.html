@@ -677,7 +677,7 @@ handleMouseDown = (e, state, node) ->
 
 			clearFocusRecursive(state.root)
 			setFocus([{canvasId: state.canvasId, nodeId: node.id}])
-			node.cursor().mouseDown = true
+			node.mouseDown = true
 			y = y + 8
 
 			index = getChildIndexFromPos(node, e.x, e.y)
@@ -702,7 +702,7 @@ handleMouseUp = (e, state, node) ->
 			if containsPoint(c, e.x, e.y)
 				handleMouseUp(e, state, c)
 		if not e.stop
-			node.cursor().mouseDown = false
+			node.mouseDown = false
 
 
 
@@ -714,7 +714,7 @@ handleMouseMove = (e, state, node) ->
 
 		if not e.stop
 			e.stop = true
-			if node.cursor().mouseDown
+			if node.mouseDown
 				index = getChildIndexFromPos(node, e.x, e.y)
 				setSelection(node, node.cursor().down, index)
 				pubCursor(node)

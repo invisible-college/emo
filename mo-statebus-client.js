@@ -479,7 +479,7 @@
         var js_urls = {
             react: 'https://cdnjs.cloudflare.com/ajax/libs/react/0.12.2/react.js',
             sockjs: 'https://cdn.jsdelivr.net/sockjs/0.3.4/sockjs.min.js',
-            statebus: 'https://dl.dropboxusercontent.com/u/1000932/libs/statebus3.1.js',
+            statebus: 'https://stateb.us/statebus.js',
             coffeescript: 'https://dl.dropboxusercontent.com/u/1000932/libs/coffee-script.js',
             jsondiffpatch: '/jsondiffpatch.js',
             google_diff_match_patch: '/google_diff_match_patch.js'
@@ -794,7 +794,7 @@ function setupDiffSync(){
 
 
     bus('diffsync/*').on_fetch = function(key){ 
-        
+        console.log('FETCH CALLED')
        //Fetch the whole doc and then start syncing with the client.
         fetch('/serverdiff/' + key, saveIncomingEdits);
 

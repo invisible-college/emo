@@ -15,7 +15,7 @@ window.getLastItemInPath = ->
 	lastItem = subs[subs.length - 1].split("?")[0]
 	return lastItem
 
-me = create_id().toString()
+
 codeUrl = 'diffsync/' + getLastItemInPath()
 if not codeUrl
 	codeUrl = 'diffsync/welcome'
@@ -56,11 +56,23 @@ document.addEventListener('paste', (e) ->
 			items.push( new STR(c) )
 
 		node.insertChildren(items)
-		setSelection(node, node.caret.start + items.length, node.caret.start + items.length)
+		setSelection(node, node.cursor().start + items.length, node.cursor().start + items.length)
 		renderAll(dom)
 )
 
-fontColors = ['red', 'yellow', 'orange', 'white', 'pink']
+fontColors = ['#FF1493', '#00FFFF', '#FF7F50', '#7FFF00']
+
+hashCode = (str) ->
+	hash = 0
+	i = 0
+	if str.length == 0 then return hash
+	for c in str
+		c = str.charCodeAt(c)
+		hash  = ((hash << 5) - hash) + c
+		hash |= 0
+
+	return hash >>> 0
+
 #Our special canvas-based render tree
 class R #R for 'rectangle'
 	constructor: (args) ->
@@ -71,19 +83,26 @@ class R #R for 'rectangle'
 				@[a] = args[a]
 
 		#initialize some default fields
-		if not @caret       then @caret = {start: 0, end: 0, up: 0, down: 0, color: fontColors[Math.floor(Math.random() * fontColors.length)]}
-		if not @children    then @children = []
-		if not @scrollTop   then @scrollTop = 0
-		if not @scrollLeft  then @scrollLeft = 0
-		if not @font        then @font = "100 14px Menlo"
-		if not @selectColor then @selectColor = '#585851'
-		if not @fontColor   then @fontColor = "#FFFFFF"
-		if not @caretColor  then @caretColor = @fontColor
-		if not @lineHeight  then @lineHeight = 18
+		if not @children    		then @children = []
+		if not @scrollTop   		then @scrollTop = 0
+		if not @scrollLeft  		then @scrollLeft = 0
+		if not @font        		then @font = "100 14px Menlo"
+		if not @selectColor 		then @selectColor = '#585851'
+		if not @fontColor   		then @fontColor = "#FFFFFF"
+		if not @lineHeight  		then @lineHeight = 18
+		if not @me 					then @me = create_id().toString()
+		if not @cursors				then @cursors = {} 
+		if not @lastPubbedCursors 	then @lastPubbedCursors = {}
+		if not @cursorColors		then @cursorColors = {}
 
+		@lastPubbedCursors[@me] = {start: 0, end: 0, up: 0, down: 0}
+		@cursors[@me] = clone(@lastPubbedCursors[@me])
+
+	cursor: -> @cursors[@me]
 
 	insertChildren: (toadd, ignoreCode) ->
-		args = [@caret.start, @caret.end - @caret.start].concat(toadd)
+		caret = @cursors[@me]
+		args = [caret.start, caret.end - caret.start].concat(toadd)
 		@children.splice.apply(@children, args)
 	
 		if @onChange
@@ -92,35 +111,31 @@ class R #R for 'rectangle'
 	deleteChildren: (start, howmany, ignoreCode) ->
 		deleted = @children.splice(start, howmany)
 
-
 		if @onChange
 			@onChange({type: 'deletedChildren', deleted: deleted, node: this})
 
 	render: (ctx) ->
 		ctx.font = @font
+		caret = @cursors[@me]
 		
-
-		carets = if @codekey then fetch('/cursors/' + @codekey) else {}
-		if not carets.cursors
-			carets.cursors = {}
-			carets.cursors[me] = clone(@caret)
-
-		if @codekey and not carets.cursors[me] or carets.cursors[me].start != @caret.start
-			carets.cursors[me] = @caret
-			save(carets)
+		for c of @cursors
+			if c == @me
+				@cursorColors[@me] = 'white'
+			else if @cursorColors[c] == undefined
+				@cursorColors[c] = fontColors[hashCode(c) % fontColors.length]
 
 		#if the caret is at the beginning render it
 		if @editable
-			for c of carets.cursors
-				if carets.cursors[c].start == 0
-					ctx.fillStyle = carets.cursors[c].color
-					ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop, 1, @lineHeight)
+			for c of @cursors
+				if @cursors[c].start == 0
+					ctx.fillStyle = @cursorColors[c]
+					ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop, 2, @lineHeight)
 
 
 		for child, index in @children
 
 			#render selection background
-			if @editable and index >= @caret.start and index < @caret.end
+			if @editable and index >= caret.start and index < caret.end
 				ctx.fillStyle = @selectColor
 				ctx.fillRect(child.x + 1, child.y + 3, child.width, child.height)
 			
@@ -130,10 +145,10 @@ class R #R for 'rectangle'
 
 			# render the caret after this child if it comes next
 			if @editable
-				for c of carets.cursors
-					if index == carets.cursors[c].start - 1
-						ctx.fillStyle = carets.cursors[c].color
-						ctx.fillRect(child.x + child.width, child.y + 3 , 1, @lineHeight)
+				for c of @cursors
+					if index == @cursors[c].start - 1
+						ctx.fillStyle = @cursorColors[c]
+						ctx.fillRect(child.x + child.width, child.y + 3 , 2, @lineHeight)
 
 		#render the border
 		if @border
@@ -224,17 +239,19 @@ compare = (codekey, node, dom) ->
 		codestate.code = ''
 
 	editorcode = toReadableString(node.children)
-   
-	delta = bus.diffPatcher.diff(editorcode, codestate.code)
-
+	delta = bus.diffPatcher.diff(codestate.code, editorcode)
 	if delta
 		codestate.code = editorcode
-		save(codestate)
+		save(codestate)		
+		#predict where people's cursors will go.
+		for c of node.cursors
+			if c != node.me
+				node.cursors[c].start = getCursorFromDelta(delta, node.cursors[c].start)
+
 
 
 getCursorFromDelta = (delta, cursorPos) ->
-
-	originalCursorPos = cursorPos
+	originalCursorPos = cursorPos + 1
 	lines = delta[0].split('\n')
 	start = 0
 	end = 0
@@ -243,19 +260,18 @@ getCursorFromDelta = (delta, cursorPos) ->
 		l = decodeURIComponent(l)
 		if l.startsWith('@@') and l.endsWith('@@')
 			match = digits.exec(l)
-			start = parseInt(match[1])
-			end = parseInt(match[2])
+			start = parseInt(match[1]) - 1
+			end = parseInt(match[2]) - 1
 		else if l.startsWith('+') and start <= originalCursorPos
 			cursorPos += l.length - 1
-		else if l.startsWith('-') and start + l.length - 1 < originalCursorPos
+		else if l.startsWith('-') and start + l.length - 1 <= originalCursorPos
 			start += l.length - 1
 			cursorPos -= l.length - 1
 		else if l.startsWith(' ')
 			start += l.length - 1
-		else if l.startsWith('-') and start < originalCursorPos
+		else if l.startsWith('-') and start <= originalCursorPos
 			cursorPos = start
-		# else if l.startsWith('+') and start < originalCursorPos
-		# 	cursorPos += l.length - 1
+
 	return cursorPos
 
 # this method reactively fetches the code that this element represents
@@ -264,27 +280,48 @@ getCursorFromDelta = (delta, cursorPos) ->
 makeStateReactive = (codekey, node, dom) ->
 	bus.reactive( (codekey, node, dom) ->
 		codestate = fetch(codekey)
+
 		editorcode = toReadableString(node.children)
 		delta = bus.diffPatcher.diff(editorcode, codestate.code);
+
 		if delta
 			loadFromString(codestate.code, node, dom)
-			cursorPos = getCursorFromDelta(delta, node.caret.start)
-			setSelection(node, cursorPos, cursorPos)
+			for c of node.cursors
+					node.cursors[c].start = getCursorFromDelta(delta, node.cursors[c].start)
+			setSelection(node, node.cursor().start, node.cursor().start)
 			renderAll(dom)
+			
+
 		)(codekey, node, dom)
 
-	bus.reactive( (codeUrl, node, dom) ->
-		cursorstate = fetch('/cursors/' + codeUrl)
-		if not cursorstate.cursors
-			cursorstate.cursors = {}
-			cursorstate.cursors[me] = clone(node.caret)
+	bus.reactive( (codekey, node, dom) ->
+		cursorstate = fetch('/cursors/' + codekey)
+		
+		if not cursorstate.cursors then cursorstate.cursors = {}
+		nodecursor = node.cursor()
+		needsrender = false
 
-		if not cursorstate.cursors[me] or cursorstate.cursors[me].start != node.caret.start
-			cursorstate.cursors[me] = clone(node.caret)
+		#let's see if some other cursor changed.
+		diff = bus.diffPatcher.diff(node.lastPubbedCursors, cursorstate.cursors)
+		if diff and (Object.keys(diff).length > 1 or diff[node.me] == undefined)
+			#if it did, then update our node
+			node.lastPubbedCursors = clone(cursorstate.cursors)
+			node.cursors = clone(node.lastPubbedCursors)
+			needsrender = true
+
+		#did our cursor get cleared out? if so, resend it
+		if cursorstate.cursors[node.me] == undefined
+			console.log(nodecursor)
+			node.cursors[node.me] = nodecursor
+			node.lastPubbedCursors[node.me] = clone(nodecursor)
+			cursorstate.cursors[node.me] = clone(nodecursor)
+			needsrender = true
 			save(cursorstate)
 
-		renderAll(dom)
-		)(codekey, node, dom)
+		if needsrender
+			renderAll(dom)
+
+	)(codekey, node, dom)
 
 ## DOM OPERATIONS ---- TO BE MOVED AS METHODS OF DOM OBJECT
 insertStr = (str, node, dom, ignoreCode) ->
@@ -302,7 +339,7 @@ setSelection = (el, down, up) ->
 	if down < 0 then down = 0
 	if up < 0 then up = 0
 
-	caret = el.caret
+	caret = el.cursor()
 	caret.down = down
 	caret.up = up
 	if down < up
@@ -311,7 +348,6 @@ setSelection = (el, down, up) ->
 	else
 		caret.start = up
 		caret.end = down
-
 
 	setScrollOldSchool(el)
 
@@ -322,7 +358,7 @@ setSelection = (el, down, up) ->
 #OLD SCHOOL CONSOLE SCROLLING. 
 #CHECK IF WE NEED TO SCROLL IF THE CARET IS OUT OF VIEW
 setScrollOldSchool = (el) ->
-	caret = el.caret
+	caret = el.cursor()
 
 	if el.children.length > 0
 		start = Math.min(caret.start, el.children.length - 1)
@@ -436,7 +472,7 @@ handleKeyPress = (e, dom, node) ->
 			e.stop = true
 			str = String.fromCharCode(e.ev.which)
 			insertStr(str, node, dom)
-			setSelection(node, node.caret.start + 1, node.caret.start + 1)
+			setSelection(node, node.cursor().start + 1, node.cursor().start + 1)
 			renderAll(dom)
 			
 
@@ -453,48 +489,50 @@ handleKeyDown = (e, dom, node, parent) ->
 				e.stop = true
 				e.ev.preventDefault()
 				insertStr('\t', node, dom)
-				setSelection(node, node.caret.start + 1, node.caret.start + 1)
+				setSelection(node, node.cursor().start + 1, node.cursor().start + 1)
 				renderAll(dom)
 				
 
 			if e.ev.keyCode == BACKSPACE
 				e.ev.preventDefault()
-				if node.caret.start == node.caret.end
-					node.deleteChildren(node.caret.start - 1 , 1)
-					setSelection(node, node.caret.start - 1 , node.caret.start - 1)
+				if node.cursor().start == node.cursor().end
+					node.deleteChildren(node.cursor().start - 1 , 1)
+					setSelection(node, node.cursor().start - 1 , node.cursor().start - 1)
 					renderAll(dom)
 					
 				else
-					node.deleteChildren(node.caret.start, node.caret.end - node.caret.start)
-					setSelection(node, node.caret.start, node.caret.start)
+					node.deleteChildren(node.cursor().start, node.cursor().end - node.cursor().start)
+					setSelection(node, node.cursor().start, node.cursor().start)
 					renderAll(dom)
 					
 
 			else if e.ev.keyCode == LEFT
-				down = node.caret.down
-				up = node.caret.up
+				down = node.cursor().down
+				up = node.cursor().up
 				up--
 				if not e.ev.shiftKey then down = up
 				e.stop = true
 				e.ev.preventDefault()
 				setSelection(node, down, up)
+				pubCursor(node)
 				renderAll(dom)
 				
 
 			else if e.ev.keyCode == RIGHT
-				down = node.caret.down
-				up = node.caret.up
+				down = node.cursor().down
+				up = node.cursor().up
 				up++
 				if not e.ev.shiftKey then down = up
 				setSelection(node, down, up)
 				e.stop = true
 				e.ev.preventDefault()
+				pubCursor(node)
 				renderAll(dom)
 				
 
 			else if e.ev.keyCode == DOWN
-				down = node.caret.down
-				up = node.caret.up
+				down = node.cursor().down
+				up = node.cursor().up
 				thislinestart = getThisLineStart(node, up)
 				relative = up - thislinestart
 				nextlinestart = getNextLineStart(node, up)
@@ -506,11 +544,12 @@ handleKeyDown = (e, dom, node, parent) ->
 				setSelection(node, down, up)
 				e.stop = true
 				e.ev.preventDefault()
+				pubCursor(node)
 				renderAll(dom)
 
 			else if e.ev.keyCode == UP #up
-				down = node.caret.down
-				up = node.caret.up
+				down = node.cursor().down
+				up = node.cursor().up
 				thislinestart = getThisLineStart(node, up)
 				relative = up - thislinestart
 				prevlinestart = getPreviousLineStart(node, up)
@@ -522,26 +561,27 @@ handleKeyDown = (e, dom, node, parent) ->
 				setSelection(node, down, up)
 				e.stop = true
 				e.ev.preventDefault()
+				pubCursor(node)
 				renderAll(dom)
 
 			else if e.ev.ctrlKey
 				if char == 'A'
-					up = getThisLineStart(node, node.caret.up)
-					down = node.caret.down
+					up = getThisLineStart(node, node.cursor().up)
+					down = node.cursor().down
 					if not e.ev.shiftKey then down = up
 					setSelection(node, down, up)
 					renderAll(dom)
 				
 				else if char == 'E'
-					up = getNextLineStart(node, node.caret.up) - 1
-					down = node.caret.down
+					up = getNextLineStart(node, node.cursor().up) - 1
+					down = node.cursor().down
 					if not e.ev.shiftKey then down = up
 					setSelection(node, down, up)
 					renderAll(dom)
 					
 				else if char == 'V'
 					i = 0
-					up = node.caret.up
+					up = node.cursor().up
 					while i < 10
 						if e.ev.shiftKey
 							up = getPreviousLineStart(node, up)
@@ -567,7 +607,7 @@ handleKeyDown = (e, dom, node, parent) ->
 
 				else if char == 'C'
 					clipboard = fetch('clipboard')
-					clipboard.plain = toReadableString(node.children, node.caret.start, node.caret.end - node.caret.start)
+					clipboard.plain = toReadableString(node.children, node.cursor().start, node.cursor().end - node.cursor().start)
 					save(clipboard)
 
 
@@ -637,11 +677,12 @@ handleMouseDown = (e, state, node) ->
 
 			clearFocusRecursive(state.root)
 			setFocus([{canvasId: state.canvasId, nodeId: node.id}])
-			node.caret.mouseDown = true
+			node.cursor().mouseDown = true
 			y = y + 8
 
 			index = getChildIndexFromPos(node, e.x, e.y)
 			setSelection(node, index, index)
+			pubCursor(node)
 			e.stop = true
 			renderAll(state)
 
@@ -661,7 +702,9 @@ handleMouseUp = (e, state, node) ->
 			if containsPoint(c, e.x, e.y)
 				handleMouseUp(e, state, c)
 		if not e.stop
-			node.caret.mouseDown = false
+			node.cursor().mouseDown = false
+
+
 
 handleMouseMove = (e, state, node) ->
 	if node.type == 'r'
@@ -671,12 +714,22 @@ handleMouseMove = (e, state, node) ->
 
 		if not e.stop
 			e.stop = true
-			if node.caret.mouseDown
+			if node.cursor().mouseDown
 				index = getChildIndexFromPos(node, e.x, e.y)
-				setSelection(node, node.caret.down, index)
+				setSelection(node, node.cursor().down, index)
+				pubCursor(node)
 				renderAll(state)
 
 
+
+pubCursor = (node) ->
+	if node.codekey
+		cursorstate = fetch('/cursors/' + node.codekey)
+		console.log('HEY HEY HEY')
+		if not cursorstate.cursors then cursorstate.cursors = {}
+		cursorstate.cursors[node.me] = clone(node.cursors[node.me])
+		node.lastPubbedCursors[node.me] = clone(node.cursors[node.me])
+		save(cursorstate)
 
 
 # we re-render the entire canvas each time there's a change.
@@ -729,18 +782,6 @@ updateIncludes = (dom, node) ->
 
 
 
-
-# registerCursor = (diffsyncKey) ->
-# 	window.addEventListener('beforeunload', (e) ->
-# 		key = '' + diffsyncKey
-# 		cursorstate = fetch(key)
-# 		windowstate = fetch('window')
-# 		windowstate.closing = true
-# 		save(windowstate)
-# 		delete cursorstate.cursors[me]
-# 		save(cursorstate)
-# 	)
-
 #The canvas dom element that will render the text editor
 dom.CANVASEDITOR = ->
 	if not doms[@props.id]
@@ -771,7 +812,8 @@ dom.CANVASEDITOR = ->
 		textarea.onOldSchoolScroll = (el) ->
 			linenums.scrollTop = el.scrollTop
 
-
+		textarea.onCursorChanged = (el) ->
+			compare(el.codekey, el, dom)
 
 
 		dom.root.children.push(linenums)
@@ -1120,8 +1162,8 @@ dom.INCLUDE = ->
 
 
 <script>
-  statebus_server = 'http://cheeseburgertherapy.com:3000'
-  //statebus_server = 'http://localhost:3000'
+  //statebus_server = 'http://cheeseburgertherapy.com:3000'
+  statebus_server = 'http://localhost:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

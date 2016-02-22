@@ -307,6 +307,7 @@ makeStateReactive = (codekey, node, dom) ->
 			#if it did, then update our node
 			node.lastPubbedCursors = clone(cursorstate.cursors)
 			node.cursors = clone(node.lastPubbedCursors)
+			node.cursors[node.me] = clone(nodecursor)
 			needsrender = true
 
 		#did our cursor get cleared out? if so, resend it

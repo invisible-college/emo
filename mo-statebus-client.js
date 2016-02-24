@@ -3,12 +3,12 @@
     // ****************
     // Connecting over the Network
     function socketio_client (bus, prefix, url) {
-        console.log('socketio to', url)
+        bus.log('socketio to', url)
         var socket = io(url)
         var fetched_keys = new Set()
 
         bus(prefix).on_fetch = function (key) {
-            console.log('fetching', key, 'from', url)
+            bus.log('fetching', key, 'from', url)
             // Error check
             // if (pending_fetches[key]) {
             //     console.error('Duplicate request for '+key)
@@ -20,7 +20,7 @@
         }
 
         var saver = bus(prefix).on_save = function (object) {
-            console.log('sending save', object)
+            bus.log('sending save', object)
             socket.emit('save', object)
         }
         bus(prefix).on_delete = function (key)    { socket.emit('delete', key) }
@@ -31,7 +31,7 @@
 
         // Receive stuff
         socket.on('save', function(message) {
-            console.log('socketio_client: received SAVE', message.obj.key)
+            bus.log('socketio_client: received SAVE', message.obj.key)
             var obj = message.obj
             //delete pending_fetches[obj.key]
             save(obj, saver)
@@ -53,9 +53,12 @@
         var attempts = 0
         var outbox = []
         var fetched_keys = new bus.Set()
+        var heartbeat
+        url = url.replace(/^state:\/\//, 'https://')
+        url = url.replace(/^statei:\/\//, 'http://')
         if (url[url.length-1]=='/') url = url.substr(0,url.length-1)
         function send (o) {
-            console.log('sockjs.send:', JSON.stringify(o))
+            bus.log('sockjs.send:', JSON.stringify(o))
             outbox.push(JSON.stringify(o))
             flush_outbox()
         }
@@ -66,9 +69,6 @@
             else
                 setTimeout(flush_outbox, 400)
         }
-
-
-
         bus(prefix).on_save   = function (obj) { send({method: 'save', obj: obj})
                                                  if (window.ignore_flashbacks)
                                                      recent_saves.push(JSON.stringify(obj))
@@ -77,25 +77,20 @@
                                                      recent_saves.splice(0, extra)
                                                  }
                                                }
-
-
-
         bus(prefix).on_fetch  = function (key) { send({method: 'fetch', key: key}),
                                                  fetched_keys.add(key) }
         bus(prefix).on_forget = function (key) { send({method: 'forget', key: key}),
                                                  fetched_keys.del(key) }
         bus(prefix).on_delete = function (key) { send({method: 'delete', key: key}) }
 
-
-
         function connect () {
-            console.log('[ ] trying to open')
+            console.log('%c[ ] trying to open ' + url, 'color: blue')
             sock = sock = new SockJS(url + '/statebus')
             sock.onopen = function()  {
-                console.log('[*] open', sock.protocol)
+                console.log('%c[*] opened ' + url, 'color: blue')
 
                 var me = fetch('ls/me')
-                console.log('connect: me is', me)
+                bus.log('connect: me is', me)
                 if (!me.client) {
                     me.client = (Math.random().toString(36).substring(2)
                                  + Math.random().toString(36).substring(2)
@@ -114,9 +109,11 @@
                 }
 
                 attempts = 0
+                //heartbeat = setInterval(function () {send({method: 'ping'})}, 5000)
             }
             sock.onclose   = function()  {
-                console.log('[*] close')
+                console.log('%c[*] closed ' + url, 'color: blue')
+                heartbeat && clearInterval(heartbeat); heartbeat = null
                 setTimeout(connect, attempts++ < 3 ? 1500 : 5000)
             }
 
@@ -133,10 +130,11 @@
                 //console.log('[.] message')
                 try {
                     var message = JSON.parse(event.data)
+                    var method = message.method.toLowerCase()
 
                     // We only take pubs from the server for now
-                    if (message.method.toLowerCase() !== 'pub') throw 'barf'
-                    console.log('sockjs_client received', message.obj)
+                    if (method !== 'pub' && method !== 'pong') throw 'barf'
+                    bus.log('sockjs_client received', message.obj)
 
                     var is_recent_save = false
                     if (window.ignore_flashbacks) {
@@ -146,8 +144,8 @@
                                 is_recent_save = true
                                 recent_saves.splice(i, 1)
                             }
-                        console.log('Msg', message.obj.key,
-                                    is_recent_save?'is':'is NOT', 'a flashback')
+                        // bus.log('Msg', message.obj.key,
+                        //         is_recent_save?'is':'is NOT', 'a flashback')
                     }
 
                     if (!is_recent_save)
@@ -156,6 +154,7 @@
                 } catch (err) {
                     console.error('Received bad sockjs message from '
                                   +url+': ', event.data, err)
+                    return
                 }
             }
 
@@ -168,7 +167,7 @@
         // We can do that by adding a list of dirty keys and 
 
         var bus = this
-        
+        bus.log(this)
 
         // GET returns the value immediately in a PUT
         // PUTs are queued up, to store values with a delay, in batch
@@ -176,7 +175,7 @@
         var pending_saves = {}
 
         function save_the_pending_saves() {
-            console.log('localstore: saving', pending_saves)
+            bus.log('localstore: saving', pending_saves)
             for (var k in pending_saves)
                 localStorage.setItem(k, JSON.stringify(pending_saves[k]))
             saves_are_pending = false
@@ -188,7 +187,7 @@
         }
         bus(prefix).on_save = function (obj) {
             // Do I need to make this recurse into the object?
-            console.log('localStore: on_save:', obj.key)
+            bus.log('localStore: on_save:', obj.key)
             pending_saves[obj.key] = obj
             if (!saves_are_pending) {
                 setTimeout(save_the_pending_saves, 50)
@@ -201,38 +200,33 @@
 
         // Hm... this update stuff doesn't seem to work on file:/// urls in chrome
         function update (event) {
-            console.log('Got a localstorage update', event)
-            this.get(event.key.substr('statebus '.length))
+            bus.log('Got a localstorage update', event)
+            //this.get(event.key.substr('statebus '.length))
         }
         if (window.addEventListener) window.addEventListener("storage", update, false)
         else                         window.attachEvent("onstorage", update)
     }
 
-    function handle_sockjs_urls () {
-        function get_domain(key) {
-            var m = key.match(/^sockjs\:\/\/(([^:\/?#]*)(?:\:([0-9]+))?)/)
-            if (!m) throw Error('Bad url: ', key)
-            return m[1]
-        }
-        bus('sockjs://*').on_fetch = function (key) {
-            // First look up the connection
-            c = connection_for(key)
-
-            // Now ask the connection for it
-            return c.fetch(key)
-        }
-        bus('sockjs://*').on_save = function (o) {
-            connection_for(o.key).save(o)
-        }
-        bus('sockjs://*').on_forget = function (key) {
-            connection_for(key).forget(key)
-        }
+    function universal_sockjs () {
+        var old_route = bus.route
         var connections = {}
-        function connection_for (key) {
-            var domain = get_domain(key)
-            return connections[domain] = connections[domain] || new sockjs_client(domain)
+        bus.route = function (key, method, arg) {
+            var d = get_domain(key)
+            if (d && !connections[d]) {
+                bus.sockjs_client(d + '*', d)
+                connections[d] = true
+            }
+
+            return old_route(key, method, arg)
+        }
+        function get_domain(key) {
+            var m = key.match(/^state\:\/\/(([^:\/?#]*)(?:\:([0-9]+))?)/)
+            // if (!m) throw Error('Bad url: ', key)
+            return m && m[0]
         }
 
+        // Now, if I implement proxy, then we can implement /* using a
+        // proxy on top of this universal_sockjs
         if (window.slashcut) {
             // Proxy shortcut defined with:
             bus('/*').to_fetch = function (key) {
@@ -264,8 +258,8 @@
         var data = get_query_string_value(key)
         data = (data && JSON.parse(data)) || {key : key}
         // Then I would need to:
-        //  â€¢ Change the key prefix
-        //  â€¢ Save this into the cache
+        //  - Change the key prefix
+        //  - Save this into the cache
 
         bus(prefix).on_save = function (obj) {
             window.history.replaceState(
@@ -277,6 +271,28 @@
         }
     }
 
+    function live_reload_from (prefix) {
+        if (!window.live_reload_initialized) {
+            var first_time = true
+            this(function () {
+                var re = new RegExp(".*/" + prefix + "/(.*)")
+                var file = window.location.href.match(re)[1]
+                var code = fetch('/code/invisible.college/' + file).code
+                if (!code) return
+                if (first_time) {first_time = false; return}
+                var old_scroll_position = window.pageYOffset
+                document.body.innerHTML = code
+                var i = 0
+                var d = 100
+                var interval = setInterval(function () {
+                    if (i > 500) clearInterval(interval)
+                    i += d
+                    window.scrollTo(0, old_scroll_position)
+                }, d)
+            })
+            window.live_reload_initialized = true
+        }
+    }
 
     // ****************
     // Wrapper for React Components
@@ -314,10 +330,8 @@
             // Make render reactive
             var orig_render = this.render
             this.render = bus.reactive(function () {
-
                 console.assert(this !== window)
                 if (this.render.called_directly) {
-                    
                     delete dirty_components[this.key]
 
                     // Register on any keys passed in objects in props.
@@ -330,12 +344,10 @@
                             fetch(this.props[k].key)
                     
                     // Call the renderer!
-                    return orig_render.apply(this, arguments);
+                    return orig_render.apply(this, arguments)
                 } else {
-                    
                     dirty_components[this.key] = true
                     schedule_re_render()
-
                 }
             })
         })
@@ -349,7 +361,6 @@
         })
 
         component.shouldComponentUpdate = function new_scu (next_props, next_state) {
-
             // This component definitely needs to update if it is marked as dirty
             if (dirty_components[this.key] !== undefined) return true
 
@@ -370,9 +381,8 @@
             return JSON.stringify([next_state, next_props]) !== JSON.stringify([this.state, this_props])
         }
         
-
         component.loading = function loading () {
-            return this.render.is_loading()
+            return this.render.loading()
         }
 
         // Now create the actual React class with this definition, and
@@ -409,30 +419,6 @@
                         try {
                             re_rendering = true
                             components[comp_key].forceUpdate()
-                        }catch(err){
-                            //THIS IS PROBABLY WRONG. What I'm doing is removing an element from the
-                            //dom when it throws an error. This happens when you are live editing
-                            //and the code is not complete, and thus throws an error in react.
-                            var elid = components[comp_key]._rootNodeID + '.0'
-                            // var el = document.querySelector('[data-reactid=\"' + elid + '\"]')
-                            var els = document.querySelectorAll('[id="include"]');
-                            var i = 0;
-                            
-                            while(els.length > 0 && els[i].parentNode && els[i].parentNode.children.length > 0){
-                                els[i].parentNode.removeChild(els[i]);
-                                i++;
-                            }
-                                
-
-                            // if(el && el.children.length > 0)
-                            //     el.removeChild(el.children[0])
-                                // console.log(el)
-                            // if(el && el.parentNode){
-                            //     el.parentNode.removeChild(el);
-
-                            // }
-
-                            console.error(err)
                         } finally {
                             re_rendering = false
                         }
@@ -449,7 +435,7 @@
 
     function make_client_statebus_maker () {
         var extra_stuff = ['socketio_client sockjs_client localstorage_client',
-                           'handle_sockjs_urls url_store components'].join(' ').split(' ')
+                           'universal_sockjs url_store components live_reload_from'].join(' ').split(' ')
         if (window.statebus) {
             var orig_statebus = statebus
             window.statebus = function make_client_bus () {
@@ -461,32 +447,23 @@
         }
     }
 
-    // Check to see if we wanna do the coffee conversions
-    var full_featured = false
-    var scripts = document.getElementsByTagName("script")
-    for (var i=0; i<scripts.length; i++)
-        if (scripts[i].getAttribute('type') === 'statebus') {
-            full_featured = true
-            break
-        }
-
-    if (full_featured) load_full_features()
-    else               make_client_statebus_maker()
-
-    function load_full_features() {
-        console.log('client: Loading full features')
+    load_scripts() // This function could actually be inlined
+    function load_scripts() {
+        var statebus_dir = document.querySelector('script[src*="client.js"]')
+              .getAttribute('src').match(/(.*)[\/\\]/)[1]||''
 
         var js_urls = {
             react: 'https://cdnjs.cloudflare.com/ajax/libs/react/0.12.2/react.js',
             sockjs: 'https://cdn.jsdelivr.net/sockjs/0.3.4/sockjs.min.js',
+            coffee: 'https://d2rtgkroh5y135.cloudfront.net/coffee.js',
             statebus: 'https://stateb.us/statebus.js',
             coffeescript: 'https://dl.dropboxusercontent.com/u/1000932/libs/coffee-script.js',
             jsondiffpatch: '/jsondiffpatch.js',
             google_diff_match_patch: '/google_diff_match_patch.js'
-            //coffeescript: 'https://cdnjs.cloudflare.com/ajax/libs/coffee-script/1.10.0/coffee-script.min.js'
         }
+
         for (name in js_urls)
-            document.write('<script src="' + js_urls[name] + '" charset="utf-8""></script>')
+            document.write('<script src="' + js_urls[name] + '" charset="utf-8"></script>')
 
         document.addEventListener('DOMContentLoaded', scripts_ready, false)
     }
@@ -501,7 +478,7 @@
         window.ignore_flashbacks = true
         bus.localstorage_client('ls/*')
         bus.sockjs_client ('/*', statebus_server)
-        bus('*').on_save = function (obj) { bus.pub(obj)}
+        bus('*').on_save = function (obj) { bus.pub(obj) }
         bus('/new/*').on_save = function (o) {
             if (o.key.split('/').length > 3) return
 
@@ -511,18 +488,11 @@
             delete statebus.cache[old_key]
             save(o)
         }
-
-
-
-
         load_coffee()
         setupDiffSync();
-        var body = window.Body || window.body || window.BODY
-        if (body)
-            React.render(body(), document.body)
+        if (dom.Body || dom.body || dom.BODY)
+            React.render((window.Body || window.body || window.BODY)(), document.body)
     }
-
-
 
     function improve_react() {
         function capitalize (s) {return s[0].toUpperCase() + s.slice(1)}
@@ -535,14 +505,13 @@
             is_css_prop[camelcase(css_props[i])] = true
 
         function better_element(el) {
-
             return function () {
                 var children = []
                 var attrs = {style: {}}
                 
                 for (var i=0; i<arguments.length; i++) {
                     var arg = arguments[i]
-                    
+
                     // Strings and DOM nodes and undefined become children
                     if (typeof arg === 'string'   // For "foo"
                         || arg instanceof String  // For new String()
@@ -571,7 +540,7 @@
                 }
                 if (children.length === 0) children = undefined
                 if (attrs['ref'] === 'input')
-                    console.log(attrs, children)
+                    bus.log(attrs, children)
                 return el(attrs, children)
             }
         }
@@ -631,16 +600,9 @@
                 var refresh = window.dom[name].refresh
                 return refresh && refresh.bind(this)()
             },
-            shouldComponentUpdate: function (){
-                var shouldup = window.dom[name].shouldup
-                return shouldup && shouldup.bind(this)()
-            },
             getInitialState: function () { return {} }
         })
     }
-
-
-
 
 
 
@@ -696,6 +658,7 @@
                             clearTimeout(reloadCodeTimeout)
                         //I don't want the code that we run to be reactive unless it's specified
                         //This is a way to make sure that happens
+
                         reloadCodeTimeout = setTimeout(
                             function(){
                                 //save to this object to cue re-rendering the UI after the code changes.
@@ -782,11 +745,11 @@
             }
     }
 
-//DIFFERENTIAL SYNC CODE
+
+    //DIFFERENTIAL SYNC CODE
 function clone(obj){
     return JSON.parse(JSON.stringify(obj))
 }
-
 
 
 
@@ -859,7 +822,7 @@ function saveIncomingEdits(message){
 
     //When the client makes changes, send to the server.
     //TODO: make the response timeout dynamic
-    setTimeout( function(){ saveOutgoingEdits(key); } , 80);
+    setTimeout( function(){ saveOutgoingEdits(key); } , 50);
     
 }
 

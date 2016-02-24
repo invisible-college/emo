@@ -296,7 +296,6 @@ makeStateReactive = (codekey, node, dom) ->
 		if delta
 			loadFromString(codestate.code, node, dom)
 			for c of node.cursors
-					console.log(node.cursors[c].start)
 					cursorPreservation(delta, node.cursors[c])
 			setSelection(node, node.cursor().start, node.cursor().start)
 			needsrender = true
@@ -306,7 +305,6 @@ makeStateReactive = (codekey, node, dom) ->
 		#If any cursors were explicitly changed, override our cursor preservations
 		cursordiff = bus.diffPatcher.diff(node.lastPubbedCursors, codestate.cursors)
 		if cursordiff and (Object.keys(cursordiff).length > 1 or cursordiff[node.me] == undefined)
-			console.log(cursordiff)
 			for c of cursordiff
 				if c != node.me #never overwrite our own cursor
 					if codestate.cursors[c]
@@ -321,7 +319,6 @@ makeStateReactive = (codekey, node, dom) ->
 		#Then rebroadcast ours.
 		if codestate.cursors[node.me] == undefined
 			nodecursor = node.cursors[node.me]
-			console.log(nodecursor)
 			node.cursors[node.me] = nodecursor
 			node.lastPubbedCursors[node.me] = clone(nodecursor)
 			codestate.cursors[node.me] = clone(nodecursor)

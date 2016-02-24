@@ -128,13 +128,12 @@ function userbusfunk (clientbus, conn){
         if(key.startsWith('/serverdiff/')){
             var strippedKey = key.substring('/serverdiff/'.length)
             forgetClientForDiffSync(conn.id, strippedKey)
-            // var shared = fetch('/' + strippedKey);
-            // console.log(shared)
-            // if(shared.doc.cursors){
-            //     console.log('DELETING CURSORS')
-            //     delete shared.doc.cursors
-            //     save(shared);
-            // }
+            var shared = fetch('/' + strippedKey);
+            console.log(shared)
+            if(shared.doc.cursors){
+                delete shared.doc.cursors
+                save(shared);
+            }
         // }
         }else if(key.startsWith('/cursors/')){
             var cursors = fetch(key);

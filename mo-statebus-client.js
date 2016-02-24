@@ -688,13 +688,15 @@
     function include (codeUrl){
         //Including plain ol javascript.
         
-            // diffsync(codeUrl);
+            reloadCodeTimeout = null;
             bus.reactive(
                 function (){
                         codeObj = fetch(codeUrl)
+                        if(reloadCodeTimeout)
+                            clearTimeout(reloadCodeTimeout)
                         //I don't want the code that we run to be reactive unless it's specified
                         //This is a way to make sure that happens
-                        setTimeout(
+                        reloadCodeTimeout = setTimeout(
                             function(){
                                 //save to this object to cue re-rendering the UI after the code changes.
                                 includeobj = fetch('include')
@@ -707,7 +709,7 @@
 
                                 save(includeobj)
                             },
-                        0)
+                        300)
                 
 
                 }
@@ -857,7 +859,7 @@ function saveIncomingEdits(message){
 
     //When the client makes changes, send to the server.
     //TODO: make the response timeout dynamic
-    setTimeout( function(){ saveOutgoingEdits(key); } , 150);
+    setTimeout( function(){ saveOutgoingEdits(key); } , 80);
     
 }
 

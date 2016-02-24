@@ -116,7 +116,7 @@ class R #R for 'rectangle'
 
 	render: (ctx) ->
 		ctx.font = @font
-		caret = @cursors[@me]
+
 		
 		for c of @cursors
 			if c == @me
@@ -135,9 +135,11 @@ class R #R for 'rectangle'
 		for child, index in @children
 
 			#render selection background
-			if @editable and index >= caret.start and index < caret.end
-				ctx.fillStyle = @selectColor
-				ctx.fillRect(child.x + 1, child.y + 3, child.width, child.height)
+			if @editable
+				for c of @cursors
+					if index >= @cursors[c].start and index < @cursors[c].end
+						ctx.fillStyle = @selectColor
+						ctx.fillRect(child.x + 1, child.y + 3, child.width, child.height)
 			
 			#render the child
 			ctx.fillStyle = @fontColor
@@ -231,8 +233,6 @@ class COLLAPSE extends R
 # 	)	
 
 
-
-
 compare = (codekey, node, dom) ->
 	codestate = clone(fetch(codekey))
 	if codestate.code == undefined
@@ -241,27 +241,33 @@ compare = (codekey, node, dom) ->
 	editorcode = toReadableString(node.children)
 	delta = bus.diffPatcher.diff(codestate.code, editorcode)
 	if delta
-		codestate.code = editorcode
-		save(codestate)		
+		codestate.code = editorcode	
+		
 		#predict where people's cursors will go.
 		for c of node.cursors
 			if c != node.me
-				node.cursors[c].start = getCursorFromDelta(delta, node.cursors[c].start)
+				cursorPreservation(delta, node.cursors[c])
+		pubCursor(node)
+		save(codestate)	
 
 
+
+cursorPreservation = (delta, cursor) ->
+	cursor.start = getCursorFromDelta(delta, cursor.start)
+	cursor.end = getCursorFromDelta(delta, cursor.end)
+	cursor.up = getCursorFromDelta(delta, cursor.up)
+	cursor.down = getCursorFromDelta(delta, cursor.down)
 
 getCursorFromDelta = (delta, cursorPos) ->
 	originalCursorPos = cursorPos + 1
 	lines = delta[0].split('\n')
 	start = 0
-	end = 0
-	digits = /-(\d+),(\d+) \+(\d+),(\d+)/g
+	digits = /-(\d+)(,(\d+))? \+(\d+)(,(\d+))?/g
 	for l in lines
 		l = decodeURIComponent(l)
 		if l.startsWith('@@') and l.endsWith('@@')
 			match = digits.exec(l)
 			start = parseInt(match[1]) - 1
-			end = parseInt(match[2]) - 1
 		else if l.startsWith('+') and start <= originalCursorPos
 			cursorPos += l.length - 1
 		else if l.startsWith('-') and start + l.length - 1 <= originalCursorPos
@@ -280,49 +286,53 @@ getCursorFromDelta = (delta, cursorPos) ->
 makeStateReactive = (codekey, node, dom) ->
 	bus.reactive( (codekey, node, dom) ->
 		codestate = fetch(codekey)
-
+		if not codestate.cursors then codestate.cursors = {}
 		editorcode = toReadableString(node.children)
-		delta = bus.diffPatcher.diff(editorcode, codestate.code);
+		needsrender = true
 
+		#UPDATE CODE + CURSOR PRESERVATION
+		#If there was a change in the code, update the text and preserve cursors
+		delta = bus.diffPatcher.diff(editorcode, codestate.code);
 		if delta
 			loadFromString(codestate.code, node, dom)
 			for c of node.cursors
-					node.cursors[c].start = getCursorFromDelta(delta, node.cursors[c].start)
+					console.log(node.cursors[c].start)
+					cursorPreservation(delta, node.cursors[c])
 			setSelection(node, node.cursor().start, node.cursor().start)
-			renderAll(dom)
-			
-
-		)(codekey, node, dom)
-
-	bus.reactive( (codekey, node, dom) ->
-		cursorstate = fetch('/cursors/' + codekey)
+			needsrender = true
 		
-		if not cursorstate.cursors then cursorstate.cursors = {}
-		nodecursor = node.cursor()
-		needsrender = false
 
-		#let's see if some other cursor changed.
-		diff = bus.diffPatcher.diff(node.lastPubbedCursors, cursorstate.cursors)
-		if diff and (Object.keys(diff).length > 1 or diff[node.me] == undefined)
-			#if it did, then update our node
-			node.lastPubbedCursors = clone(cursorstate.cursors)
-			node.cursors = clone(node.lastPubbedCursors)
-			node.cursors[node.me] = clone(nodecursor)
+		
+		#If any cursors were explicitly changed, override our cursor preservations
+		cursordiff = bus.diffPatcher.diff(node.lastPubbedCursors, codestate.cursors)
+		if cursordiff and (Object.keys(cursordiff).length > 1 or cursordiff[node.me] == undefined)
+			console.log(cursordiff)
+			for c of cursordiff
+				if c != node.me #never overwrite our own cursor
+					if codestate.cursors[c]
+						node.lastPubbedCursors[c] = clone(codestate.cursors[c])
+						node.cursors[c] = clone(codestate.cursors[c])
+					else
+						delete node.lastPubbedCursors[c]
+						delete node.cursors[c]
 			needsrender = true
 
-		#did our cursor get cleared out? if so, resend it
-		if cursorstate.cursors[node.me] == undefined
+		#If our own cursor was deleted cuz someone logged off (logoffs clear all cursors)
+		#Then rebroadcast ours.
+		if codestate.cursors[node.me] == undefined
+			nodecursor = node.cursors[node.me]
 			console.log(nodecursor)
 			node.cursors[node.me] = nodecursor
 			node.lastPubbedCursors[node.me] = clone(nodecursor)
-			cursorstate.cursors[node.me] = clone(nodecursor)
+			codestate.cursors[node.me] = clone(nodecursor)
 			needsrender = true
-			save(cursorstate)
+			save(codestate)
 
 		if needsrender
 			renderAll(dom)
 
-	)(codekey, node, dom)
+		)(codekey, node, dom)
+
 
 ## DOM OPERATIONS ---- TO BE MOVED AS METHODS OF DOM OBJECT
 insertStr = (str, node, dom, ignoreCode) ->
@@ -725,8 +735,7 @@ handleMouseMove = (e, state, node) ->
 
 pubCursor = (node) ->
 	if node.codekey
-		cursorstate = fetch('/cursors/' + node.codekey)
-		console.log('HEY HEY HEY')
+		cursorstate = fetch(node.codekey)
 		if not cursorstate.cursors then cursorstate.cursors = {}
 		cursorstate.cursors[node.me] = clone(node.cursors[node.me])
 		node.lastPubbedCursors[node.me] = clone(node.cursors[node.me])
@@ -755,7 +764,6 @@ getCursorRelativeToCanvas = (canvasId, e) ->
 
 #Take a string and add each char to the dom element's children
 loadFromString = (str, node, dom) ->
-
 	node.children = []
 	if str
 		for c in str

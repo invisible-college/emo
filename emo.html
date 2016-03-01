@@ -22,7 +22,6 @@ if not codeUrl
 
 
 #If we visit /emo/blah, then let's load code at the key
-
 include(codeUrl)
 
 
@@ -60,7 +59,7 @@ document.addEventListener('paste', (e) ->
 		renderAll(dom)
 )
 
-fontColors = ['#FF1493', '#00FFFF', '#FF7F50', '#7FFF00']
+cursorColors = ['#FF1493', '#00FFFF', '#FF7F50', '#7FFF00']
 
 hashCode = (str) ->
 	hash = 0
@@ -73,14 +72,18 @@ hashCode = (str) ->
 
 	return hash >>> 0
 
-#Our special canvas-based render tree
-class R #R for 'rectangle'
+class DOMNODE
 	constructor: (args) ->
 		@type = 'r'
 		@str = ''
 		if args
 			for a of args
 				@[a] = args[a]
+
+#Our special canvas-based render tree
+class R extends DOMNODE #R for 'rectangle'
+	constructor: (args) ->
+		super(args)
 
 		#initialize some default fields
 		if not @children    		then @children = []
@@ -92,11 +95,17 @@ class R #R for 'rectangle'
 		if not @lineHeight  		then @lineHeight = 18
 		if not @me 					then @me = create_id().toString()
 		if not @cursors				then @cursors = {} 
-		if not @lastPubbedCursors 	then @lastPubbedCursors = {}
+		if not @serverCursors 		then @serverCursors = {}
 		if not @cursorColors		then @cursorColors = {}
+		if not @paddingLeft			then @paddingLeft = 0
+		if not @paddingTop			then @paddingTop = 0
+		if not @styleRanges			then @styleRanges = {}
 
-		@lastPubbedCursors[@me] = {start: 0, end: 0, up: 0, down: 0}
-		@cursors[@me] = clone(@lastPubbedCursors[@me])
+		if @width == '100%'
+			@autoWidth = true
+			@width = 0
+		@serverCursors[@me] = {start: 0, end: 0, up: 0, down: 0}
+		@cursors[@me] = clone(@serverCursors[@me])
 
 	cursor: -> @cursors[@me]
 
@@ -116,23 +125,39 @@ class R #R for 'rectangle'
 
 	render: (ctx) ->
 		ctx.font = @font
+		if @shadow
+			ctx.shadowBlur = 20;
+			ctx.shadowColor = "black";
 
+		if @backgroundColor
+			ctx.fillStyle = @backgroundColor
+			ctx.fillRect(@x, @y, @width, @height)
+		
+		ctx.shadowBlur = 0;
 		
 		for c of @cursors
 			if c == @me
 				@cursorColors[@me] = 'white'
 			else if @cursorColors[c] == undefined
-				@cursorColors[c] = fontColors[hashCode(c) % fontColors.length]
+				@cursorColors[c] = cursorColors[hashCode(c) % cursorColors.length]
 
 		#if the caret is at the beginning render it
 		if @editable
 			for c of @cursors
 				if @cursors[c].start == 0
 					ctx.fillStyle = @cursorColors[c]
-					ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop, 2, @lineHeight)
+					ctx.fillRect(@x - @scrollLeft, @y + 3 - @scrollTop + @paddingTop, 2, @lineHeight)
 
+		if @zorder
+			sortedChildren = @children.concat().sort (a, b) -> 
+				az = a.zIndex || 0
+				bz = b.zIndex || 0
 
-		for child, index in @children
+				return az - bz; 
+		else
+			sortedChildren = @children
+
+		for child, index in sortedChildren
 
 			#render selection background
 			if @editable
@@ -160,22 +185,25 @@ class R #R for 'rectangle'
 
 	layout: (offscreentCtx) ->
 		offscreentCtx.font = @font
-		previous = {x : @x - @scrollLeft, y : @y - @scrollTop , height: @lineHeight, width: 0}
+		previous = {x : @x - @scrollLeft + @paddingLeft, y : @y - @scrollTop + @paddingTop , height: @lineHeight, width: 0}
 		for c in @children
+			if c.autoWidth
+				c.width = @width - previous.x - previous.width
 			c.x = previous.x + previous.width
 			c.y = previous.y
 			if c.lineBreak
 				c.y += previous.height
-				c.x = @x - @scrollLeft
+				c.x = @x - @scrollLeft + @paddingLeft
 
 			c.layout(offscreentCtx)
 			previous = c
 
 
 #string element
-class STR extends R 
+class STR extends DOMNODE
 	constructor: (str) ->
 		super({str : str})
+		if not @lineHeight then @lineHeight = 18
 		@type = 'str'
 		
 		if @str == '\r'
@@ -197,7 +225,7 @@ class STR extends R
 			@width *= 4
 
 #a little triangle widget I used to show/hide included code.
-class COLLAPSE extends R 
+class COLLAPSE extends DOMNODE 
 	constructor: (args) ->
 		super(args, null)
 		@type = 'collapse'
@@ -250,8 +278,6 @@ compare = (codekey, node, dom) ->
 		pubCursor(node)
 		save(codestate)	
 
-
-
 cursorPreservation = (delta, cursor) ->
 	cursor.start = getCursorFromDelta(delta, cursor.start)
 	cursor.end = getCursorFromDelta(delta, cursor.end)
@@ -303,15 +329,15 @@ makeStateReactive = (codekey, node, dom) ->
 
 		
 		#If any cursors were explicitly changed, override our cursor preservations
-		cursordiff = bus.diffPatcher.diff(node.lastPubbedCursors, codestate.cursors)
+		cursordiff = bus.diffPatcher.diff(node.serverCursors, codestate.cursors)
 		if cursordiff and (Object.keys(cursordiff).length > 1 or cursordiff[node.me] == undefined)
 			for c of cursordiff
 				if c != node.me #never overwrite our own cursor
 					if codestate.cursors[c]
-						node.lastPubbedCursors[c] = clone(codestate.cursors[c])
+						node.serverCursors[c] = clone(codestate.cursors[c])
 						node.cursors[c] = clone(codestate.cursors[c])
 					else
-						delete node.lastPubbedCursors[c]
+						delete node.serverCursors[c]
 						delete node.cursors[c]
 			needsrender = true
 
@@ -320,7 +346,7 @@ makeStateReactive = (codekey, node, dom) ->
 		if codestate.cursors[node.me] == undefined
 			nodecursor = node.cursors[node.me]
 			node.cursors[node.me] = nodecursor
-			node.lastPubbedCursors[node.me] = clone(nodecursor)
+			node.serverCursors[node.me] = clone(nodecursor)
 			codestate.cursors[node.me] = clone(nodecursor)
 			needsrender = true
 			save(codestate)
@@ -383,8 +409,8 @@ setScrollOldSchool = (el) ->
 		if y + childheight > el.y + el.height
 			el.scrollTop += y + (childheight*2) - el.height - el.y
 
-		else if y < el.y
-			el.scrollTop += y - el.y
+		else if y < el.y - el.paddingTop
+			el.scrollTop += y - el.y - el.paddingTop
 		
 		if el.children[prev+1] and el.children[prev+1].str != '\n' and prevx + (prevwidth*2) > el.x + el.width
 			el.scrollLeft += prevx + (prevwidth*4) - el.x - el.width
@@ -702,7 +728,6 @@ handleMouseDown = (e, state, node) ->
 			toCollapse.display = 'block'
 		renderAll(state)
 		e.stop = true
-		# save(state)
 
 handleMouseUp = (e, state, node) ->
 	if node.type == 'r'
@@ -735,7 +760,7 @@ pubCursor = (node) ->
 		cursorstate = fetch(node.codekey)
 		if not cursorstate.cursors then cursorstate.cursors = {}
 		cursorstate.cursors[node.me] = clone(node.cursors[node.me])
-		node.lastPubbedCursors[node.me] = clone(node.cursors[node.me])
+		node.serverCursors[node.me] = clone(node.cursors[node.me])
 		save(cursorstate)
 
 
@@ -746,8 +771,8 @@ renderAll = (dom) ->
 	if dom.root and dom.root.height and dom.ctx
 		dom.root.x = 0
 		dom.root.y = 0
-		dom.root.layout(dom.offscreenCtx) #we re-layout the whole dom each time.
 		dom.ctx.clearRect(0, 0, dom.root.width, dom.root.height)
+		dom.root.layout(dom.offscreenCtx) #we re-layout the whole dom each time.
 		dom.root.render(dom.ctx)
 
 
@@ -795,9 +820,9 @@ dom.CANVASEDITOR = ->
 	dom = doms[@props.id]
 
 	if not dom.root
-		dom.root = new R({width: @props.width, height: @props.height})
-		textarea = new R({width: @props.width - 40, height: @props.height, id: "#{codeUrl}", editable: true, codekey: "#{codeUrl}"})	
-		linenums = new R({width: 40, height: @props.height, id: 'linenums', fontColor: '#aaa'})
+		dom.root = new R({zorder: true, width: @props.width, height: @props.height})
+		textarea = new R({width: '100%', paddingTop: 5, height: @props.height, id: "#{@props.id}", editable: true, codekey: "#{@props.id}"})	
+		linenums = new R({width: 40, zIndex: 1, paddingLeft: 10, backgroundColor: 'rgba(25, 27, 22, 1)', paddingTop: 5, height: @props.height, id: 'linenums', fontColor: '#aaa'})
 		linenums.children.push(new STR('1'));
 		linenums.children.push(new STR('\n'));
 
@@ -817,6 +842,10 @@ dom.CANVASEDITOR = ->
 
 		textarea.onOldSchoolScroll = (el) ->
 			linenums.scrollTop = el.scrollTop
+			if el.scrollLeft > 0
+				linenums.shadow = true;
+			else
+				linenums.shadow = false;
 
 		textarea.onCursorChanged = (el) ->
 			compare(el.codekey, el, dom)
@@ -942,66 +971,6 @@ isInViewVertical = (child, parent) ->
 	return nodetop >= 0 and nodetop < parent.height
 
 
-setRectBoundaries = (node, x, y, offscreentCtx, parent, previous) ->
-
-	if not isInViewVertical(node, parent)
-		return node
-
-	offscreentCtx.font = "100 14px Menlo"
-	node.x = x
-	node.y = y
-
-	if node.display == 'block' #render stuff on a new line
-		
-		if previous
-			node.y = previous.y + previous.height
-			y = node.y
-		
-		else if node.str == '\n' #if the first character is a new line, we don't have measurements so wing it
-			node.y = y + 18
-			y = node.y
-
-		if parent
-			node.x = parent.x
-			x = node.x
-
-
-	if node.type == 'r'
-
-		if node.display != 'none'
-			prev = null
-			for c in node.children
-				result = setRectBoundaries(c, x, y, offscreentCtx, node, prev)
-				x = result.x + result.width
-				y = result.y
-				prev = c
-
-			rect = getBoundingRect(node.children)
-			node.childrenWidth = rect.width
-			node.childrenHeight = rect.height
-
-		return node
-
-	else if node.type == 'str'
-		result = { x: x, y: y, width:0, height: 16 }
-		result.width = offscreentCtx.measureText(node.str).width
-		if node.str == '\n'
-			result.width = 0
-
-		if node.str == '\t' then result.width *= 4
-		node.width = result.width
-		node.height = result.height
-		return result
-
-	else if node.type == 'collapse'
-		node.width = 8
-		node.height = 16
-		return node
-
-	return {x:0, y:0, width: 0, height: 0}
-
-
-
 
 
 getStyle = (index, styleElements) ->
@@ -1034,14 +1003,16 @@ dom.CANVASEDITOR.refresh = ->
 	document.getElementById(@props.id).focus()
 
 	if not dom.root
-		dom.root = new R({width: @props.width, height: @props.height, id: "#{codeUrl}", codekey: "#{codeUrl}"}, null, dom)
+		dom.root = new R({width: @props.width, height: @props.height, id: "#{@props.id}", codekey: "#{@props.id}"}, null, dom)
 		makeStateReactive(dom.root.codekey, dom)
 	if dom.opened == undefined
 		dom.opened = false
 	if dom.canvasId == undefined
 		dom.canvasId = @props.id
 
-	root = dom.root
+	dom.root.width = @props.width
+	dom.root.height = @props.height
+
 	dom.offscreenCtx = createHiDPICanvas(dom.root.width, dom.root.height, null, 'fake').getContext('2d')
 	dom.ctx = createHiDPICanvas(dom.root.width, dom.root.height, null, @props.id).getContext('2d')
 	renderAll(dom)
@@ -1080,8 +1051,7 @@ createHiDPICanvas = (w, h, ratio, id) ->
 </script>
 <script type = 'statebus' id='main'>
 
-#We should eventually have a resizable editor.
-editorwidth = 600
+
 
 #If the user doesn't write a dom.CONTENT element, we'll just render nothing.
 dom.CONTENT = ->
@@ -1100,6 +1070,8 @@ dom.BODY = ->
 	if not windowstate.height
 		windowstate.height = window.innerHeight
 		windowstate.width = window.innerWidth
+		windowstate.editorwidth = 600
+
 	state = fetch('mainstate')
 	if state.opened == undefined
 		state.opened = false
@@ -1110,7 +1082,7 @@ dom.BODY = ->
 			width: '100%'
 			height: '100%'
 			outline: 'none'
-
+			cursor: windowstate.cursor
 		tabIndex: 1
 
 
@@ -1120,24 +1092,43 @@ dom.BODY = ->
 				e.preventDefault()
 				state.opened = not state.opened
 				save(state)
+
+		onMouseMove: (e) ->
+			if windowstate.cursor == 'ew-resize' and windowstate.down
+				windowstate.editorwidth = e.clientX
+			else if state.opened and e.clientX >= windowstate.editorwidth and e.clientX < windowstate.editorwidth + 5
+				windowstate.cursor = 'ew-resize'
+			else
+				windowstate.cursor = 'default'
+
+			save(windowstate)
+		onMouseDown: (e) ->
+			windowstate.down = true
+			save(windowstate)
+
+		onMouseUp: (e) ->
+			windowstate.down = false
+			save(windowstate)
 		DIV
 			style:
 				display: if not state.opened then 'none'
 				position: 'fixed'
 				top: 0
 				left: 0
+
 			#Here's the editor
 			CANVASEDITOR
-				id: 'maincanvas'
-				width: editorwidth
+				id: codeUrl
+				width: windowstate.editorwidth
 				height: windowstate.height
 
 		DIV
 			style:
 				position: 'relative'
-				left: if not state.opened then 0 else editorwidth
+				left: if not state.opened then 0 else windowstate.editorwidth
 				top: 0
 				
+
 			#Here's the view rendered from the user's code.
 			INCLUDE null,
 
@@ -1168,8 +1159,8 @@ dom.INCLUDE = ->
 
 
 <script>
-  statebus_server = 'http://cheeseburgertherapy.com:3000'
-  //statebus_server = 'http://localhost:3000'
+  //statebus_server = 'http://cheeseburgertherapy.com:3000'
+  statebus_server = 'http://localhost:3000'
 </script>
 <script src="/mo-statebus-client.js"></script>
 <style type ='text/css'>

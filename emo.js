@@ -4,7 +4,8 @@ var bus = require('statebus-server')(),
     app = express(),
     fs = require('fs'),
     path = require('path'),
-    jsondiffpatch = require('jsondiffpatch')
+    jsondiffpatch = require('jsondiffpatch'),
+    urlParse = require('url')
 
 // ##############
 // Setup the HTTP server
@@ -34,6 +35,56 @@ server = server.listen(3000, function () {
     
 })
 
+var https = require('https')
+// var options = {  host: 'npmcdn.com', path: '/three@0.74.0'}
+// var callback = function(response) {
+//   var str = '';
+
+//   //another chunk of data has been recieved, so append it to `str`
+//   response.on('data', function (chunk) {
+//     str += chunk;
+//   });
+
+//   //the whole response has been recieved, so we just print it out here
+//   response.on('end', function () {
+//     console.log(str);
+//   });
+// }
+
+// var request = https.request(options, callback).end();
+
+
+
+function requestCode(url, callback){
+
+    var parsedurl = urlParse.parse(url)
+    var options = {'host' : parsedurl.hostname, port: parsedurl.port, path: parsedurl.path}
+
+    var protocol = http;
+    if(parsedurl.protocol === 'https:')
+        protocol = https;
+
+    var cb = function(response){
+          var str = '';
+
+          //another chunk of data has been recieved, so append it to `str`
+          response.on('data', function (chunk) {
+            str += chunk;
+          });
+
+          //the whole response has been recieved, so we just print it out here
+          response.on('end', function () {
+            callback(str);
+          });
+    }
+
+    protocol.request(options, cb).end();
+}
+
+
+ 
+
+
 
 bus.file_store('/*', 'db', 'backups') // Save our cache across server restarts
 bus.sockjs_server(server, userbusfunk) // Accept statebus network connections
@@ -52,6 +103,20 @@ app.get('/mo-statebus-client.js', send_file('mo-statebus-client.js'))
 app.get('/emo/:codeUrl',          send_file('emo.html') )
 app.get('/jsondiffpatch.js',      send_file('jsondiffpatch.js'))
 app.get('/google_diff_match_patch.js', send_file('google_diff_match_patch.js'))
+app.get('/textwidget/:codeUrl',        send_file('textwidget.html'))
+
+bus.diffPatcher = new jsondiffpatch.create({textDiff : {minLength : 1}});
+
+
+bus('/url/*').on_fetch = function(key){
+    key = key.substring('/url/'.length);
+
+    if(key.startsWith('http')){
+
+        var callback = function(str){ bus.pub({key : '/url/' + key, content: str}) }
+        requestCode(key, callback);
+    }
+}
 
 
 if (!String.prototype.startsWith) {
@@ -79,7 +144,7 @@ function forgetClientForDiffSync(clientid, diffsynckey){
 }
 
 
-bus.diffPatcher = new jsondiffpatch.create({textDiff : {minLength : 1}});
+
 
 // we want to create a bus for each client
 // this will let us do collaborative edits

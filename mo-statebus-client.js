@@ -488,8 +488,10 @@
             delete statebus.cache[old_key]
             save(o)
         }
-        load_coffee()
+
         setupDiffSync();
+        load_coffee()
+        
         if (dom.Body || dom.body || dom.BODY)
             React.render((window.Body || window.body || window.BODY)(), document.body)
     }
@@ -606,6 +608,7 @@
 
 
 
+
     function load_coffee_code (code, filename){
         // Compile coffeescript to javascript
         var compiled
@@ -647,40 +650,6 @@
     }
 
 
-    function include (codeUrl){
-        //Including plain ol javascript.
-        
-            reloadCodeTimeout = null;
-            bus.reactive(
-                function (){
-                        codeObj = fetch(codeUrl)
-                        if(reloadCodeTimeout)
-                            clearTimeout(reloadCodeTimeout)
-                        //I don't want the code that we run to be reactive unless it's specified
-                        //This is a way to make sure that happens
-
-                        reloadCodeTimeout = setTimeout(
-                            function(){
-                                //save to this object to cue re-rendering the UI after the code changes.
-                                includeobj = fetch('include')
-                                try{
-                                    if(codeObj.code)
-                                        load_coffee_code(codeObj.code, codeObj.key)
-                                }catch(err){
-                                    console.error(err)
-                                }
-
-                                save(includeobj)
-                            },
-                        300)
-                
-
-                }
-            )()
-        
-    }
-
-
     function load_coffee () {
         var scripts = document.getElementsByTagName("script")
         var filename = window.location.href.substring(window.location.href.lastIndexOf('/') + 1)
@@ -688,65 +657,77 @@
         for (var i=0; i<scripts.length; i++)
             if (scripts[i].getAttribute('type') === 'statebus') {
                 // Compile coffeescript to javascript
-                var compiled
                 var code
-                // try {
 
-                    if(scripts[i].src)
-                    {
-                        srcLoc = scripts[i].src.replace('file://', '')
-                        include(srcLoc)
-                        // filename = srcLoc
-                        // codedata = fetch(srcLoc)
-
-                        // if(!codedata.code){
-                        //     codedata.code = 'dom.TEST = ->\n\tDIV null,\n\t\t"test"'
-                        // }
-                        // code = codedata.code
-                    }else{
-
-                        code = scripts[i].text
-                        if(scripts[i].id !== 'main')
-                            load_coffee_code(code, filename)
-                        else
-                            load_coffee_code(code, 'main')
-                    }
-                    
-                    
-                    // compiled = CoffeeScript.compile(code,
-                    //                                 {bare: true,
-                    //                                  sourceMap: true,
-                    //                                  filename: filename})
-                    // var v3SourceMap = JSON.parse(compiled.v3SourceMap)
-                    // v3SourceMap.sourcesContent = code
-                    // v3SourceMap = JSON.stringify(v3SourceMap)
-
-                    // // Base64 encode it
-                    // var js = compiled.js + '\n'
-                    // js += '//@ sourceMappingURL=data:application/json;base64,'
-                    // js += btoa(v3SourceMap) + '\n'
-                    // js += '//@ sourceURL=' + filename
-                    // compiled = js
-                // } catch (error) {
-                //     if (error.location)
-                //         console.error('Syntax error in '+ filename + ' on line',
-                //                       error.location.first_line
-                //                       + ', column ' + error.location.first_column + ':',
-                //                       error.message)
-                //     else throw error
-                // }
-
-                // if (compiled) {
-                //     eval(compiled)
-                //     window.dom = dom
-                //     for (var view in dom)
-                //         make_component(view)
-                // }
+                if(scripts[i].src) {
+                    srcLoc = scripts[i].src.replace('file://', '')
+                    include(srcLoc)
+                } else {
+                    code = scripts[i].text
+                    if(scripts[i].id !== 'main')
+                        load_coffee_code(code, filename)
+                    else
+                        load_coffee_code(code, 'main')
+                }
+                
             }
     }
 
 
-    //DIFFERENTIAL SYNC CODE
+    var codecache = {}
+    var include_obj_urls = {}
+    function include (codeUrl){
+
+        if(codeUrl.startsWith('http://') || codeUrl.startsWith("https://"))
+            codeUrl = "/url/" + codeUrl;
+        
+        if(include_obj_urls[codeUrl]) return
+        include_obj_urls[codeUrl] = codeUrl
+
+
+        includeobj = fetch('include') // register dependency
+        function cb (codeObj) {
+            
+            var code = codeObj.code;
+            if(codeObj.content !== undefined)
+                code = codeObj.content;
+
+            var diff = true;
+            if(codecache[codeObj.key] !== undefined){
+                diff = codecache[codeObj.key].code !== code;
+            }
+
+
+            if(diff && code !== undefined){
+
+                codecache[codeObj.key] = {code: code, iscoffee: codeObj.content === undefined};
+                
+                for(var c in include_obj_urls){
+                    if(codecache[c].code){
+                        
+                        try{
+                            if(codecache[c].iscoffee)
+                                load_coffee_code(codecache[c].code, c)
+                            else{
+                                eval(codecache[c].code)
+                            }
+                        }catch(err){
+
+                            console.error(err)
+                        }
+                    }
+                }
+
+            }
+            //save to this object to cue re-rendering the UI after the code changes.
+            save(includeobj)
+            //bus.forget(codeUrl, cb)
+        }
+        fetch(codeUrl, cb) 
+    }
+
+
+//DIFFERENTIAL SYNC CODE
 function clone(obj){
     return JSON.parse(JSON.stringify(obj))
 }
@@ -759,15 +740,15 @@ function setupDiffSync(){
 
 
     bus('diffsync/*').on_fetch = function(key){ 
-        console.log('FETCH CALLED')
+
        //Fetch the whole doc and then start syncing with the client.
         fetch('/serverdiff/' + key, saveIncomingEdits);
 
     
-        if(bus.cache[key] === undefined)
-            return {key : key}
+        // if(bus.cache[key] === undefined)
+        //     return {key : key}
 
-        return bus.cache[key];
+        // return bus.cache[key];
     }
 
     bus('diffsync/*').on_forget = function(key){
@@ -780,7 +761,6 @@ function setupDiffSync(){
 function saveIncomingEdits(message){
     
     var key = message.key.substring('/serverdiff/'.length);
-
 
     // The main doc that is what is edited.
     var shared = bus.cache[key];

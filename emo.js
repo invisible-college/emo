@@ -98,12 +98,48 @@ function send_file (name) {
     res.sendFile(path.join(__dirname, '.', name)) }
 }
 
-app.get('/',                      send_file('emo.html'))
-app.get('/mo-statebus-client.js', send_file('mo-statebus-client.js'))
-app.get('/emo/:codeUrl',          send_file('emo.html') )
-app.get('/jsondiffpatch.js',      send_file('jsondiffpatch.js'))
+if (!String.prototype.endsWith) {
+    Object.defineProperty(String.prototype, 'endsWith', {
+        enumerable: false,
+        configurable: false,
+        writable: false,
+        value: function (searchString, position) {
+            position = position || this.length;
+            position = position - searchString.length;
+            var lastIndex = this.lastIndexOf(searchString);
+            return lastIndex !== -1 && lastIndex === position;
+        }
+    });
+}
+
+app.get('/',                           send_file('emo.html'))
+app.get('/emo/:codeUrl',               send_file('emo.html') )
+app.get('/jsondiffpatch.js',           send_file('jsondiffpatch.js'))
 app.get('/google_diff_match_patch.js', send_file('google_diff_match_patch.js'))
 app.get('/textwidget/:codeUrl',        send_file('textwidget.html'))
+
+app.get('/scripts/:subdir?/:filename',          
+    function(req, res){ 
+        var filename = req.params.filename;
+        var subdir = ''
+        if (!filename.endsWith('.js'))
+            filename += '.js';
+        if(req.params.subdir)
+            subdir = req.params.subdir + '/'
+        return send_file('scripts/' + subdir + filename)(req, res) 
+
+    }
+);
+app.get('/lib/:filename',          
+    function(req, res){ 
+        var filename = req.params.filename;
+        if (!filename.endsWith('.js'))
+            filename += '.js';
+        return send_file('scripts/lib/' + filename)(req, res) 
+
+    }
+);
+
 
 bus.diffPatcher = new jsondiffpatch.create({textDiff : {minLength : 1}});
 

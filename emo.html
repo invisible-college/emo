@@ -1,4 +1,3 @@
-
 <script type = "statebus"> # -*- mode: coffee -*-
 
 window.option = (name) ->
@@ -10,32 +9,42 @@ window.option = (name) ->
 window.create_id = ->
   return new Date().getTime().toString()
 
-window.getLastItemInPath = ->
-	subs = document.location.toString().split('/')
-	lastItem = subs[subs.length - 1].split("?")[0]
-	return lastItem
 
 
-codeUrl = 'diffsync/' + getLastItemInPath()
-if not codeUrl
-	codeUrl = 'diffsync/welcome'
-
-
-#If we visit /emo/blah, then let's load code at the key
-include(codeUrl)
-
-
-
-
+fontColors = 
+	'identifier':
+		color: 'white'
+	'punctuation.operator':
+		color: '#FF0062'
+	'entity.name.function':
+		color: '#77E200'
+	'text':
+		color: 'white'
+	'storage.type':
+		color: '#00D3EC'
+	'constant.language':
+		color: '#AF65FF'
+	'string':
+		color: '#E4D55B'
+	'comment':
+		color: 'gray'
+	'keyword':
+		color: '#FF0062'
+	'keyword.operator':
+		color: '#FF0062'
+	'constant.numeric':
+		color: '#AF65FF'
+	'variable.parameter':
+		color: '#FF8500'
 #support copy and paste in the editor
-document.addEventListener('copy', (e) ->
+document.addEventListener 'copy', (e) ->
     clipboard = fetch('clipboard')
     e.clipboardData.setData('text/plain', clipboard.plain)
     e.clipboardData.setData('text/html', clipboard.html)
     e.preventDefault()
-)
 
-document.addEventListener('paste', (e) ->
+
+document.addEventListener 'paste', (e) ->
 
 	clipboard = fetch('clipboard')
 	clipboard.plain = e.clipboardData.getData('text/plain')
@@ -57,7 +66,7 @@ document.addEventListener('paste', (e) ->
 		node.insertChildren(items)
 		setSelection(node, node.cursor().start + items.length, node.cursor().start + items.length)
 		renderAll(dom)
-)
+
 
 cursorColors = ['#FF1493', '#00FFFF', '#FF7F50', '#7FFF00']
 
@@ -99,7 +108,7 @@ class R extends DOMNODE #R for 'rectangle'
 		if not @cursorColors		then @cursorColors = {}
 		if not @paddingLeft			then @paddingLeft = 0
 		if not @paddingTop			then @paddingTop = 0
-		if not @styleRanges			then @styleRanges = {}
+		if not @highlights			then @highlights = []
 
 		if @width == '100%'
 			@autoWidth = true
@@ -133,7 +142,7 @@ class R extends DOMNODE #R for 'rectangle'
 			ctx.fillStyle = @backgroundColor
 			ctx.fillRect(@x, @y, @width, @height)
 		
-		ctx.shadowBlur = 0;
+		ctx.shadowBlur = 0
 		
 		for c of @cursors
 			if c == @me
@@ -153,7 +162,7 @@ class R extends DOMNODE #R for 'rectangle'
 				az = a.zIndex || 0
 				bz = b.zIndex || 0
 
-				return az - bz; 
+				return az - bz
 		else
 			sortedChildren = @children
 
@@ -166,8 +175,14 @@ class R extends DOMNODE #R for 'rectangle'
 						ctx.fillStyle = @selectColor
 						ctx.fillRect(child.x + 1, child.y + 3, child.width, child.height)
 			
+			for highlight in @highlights
+				if index >= highlight.start and index < highlight.end
+					if highlight.style and highlight.style.color
+						ctx.fillStyle = highlight.style.color
+			if @highlights.length == 0
+				ctx.fillStyle = @fontColor
+
 			#render the child
-			ctx.fillStyle = @fontColor
 			child.render(ctx)
 
 			# render the caret after this child if it comes next
@@ -237,29 +252,7 @@ class COLLAPSE extends DOMNODE
 		ctx.lineTo(@x + 2, @y + @height)
 		ctx.fillStyle = '#F6F7EF'
 		ctx.fill()
-
-#There is a big thunk when saving code as a string
-#and then compiling that string of coffeescript
-#we don't want that to interfere with the performance
-#of the text editor, so we will reset a timer
-#whenever the text changes. If the timer expires,
-#then we will reload the code based on those edits.
-# reloadCodeTimeout = null
-# codeCache = {}
-# reloadCode = (node) ->
-# 	if reloadCodeTimeout
-# 		clearTimeout(reloadCodeTimeout)
-
-# 	reloadCodeTimeout = setTimeout( 
-# 		() ->
-# 			code = fetch(node.codekey)
-# 			codeCache[node.codekey] = toReadableString(node.children)
-# 			code.code = codeCache[node.codekey]
-# 			save(code)			
-
-# 		, 0 #300	
-# 	)	
-
+	
 
 compare = (codekey, node, dom) ->
 	codestate = clone(fetch(codekey))
@@ -269,14 +262,20 @@ compare = (codekey, node, dom) ->
 	editorcode = toReadableString(node.children)
 	delta = bus.diffPatcher.diff(codestate.code, editorcode)
 	if delta
+		#Save the changes to the diffsynced state.
 		codestate.code = editorcode	
 		
-		#predict where people's cursors will go.
+		#Now we are going to predict where people's cursors will go.
+		#it seems unneccessary to do this based on a diff
+		#when we know the user interactions, but I want it
+		#to mirror what the peers do when they see updates.
+		#this is because my cursor preservation isn't perfect yet...
 		for c of node.cursors
 			if c != node.me
 				cursorPreservation(delta, node.cursors[c])
 		pubCursor(node)
-		save(codestate)	
+		save(codestate)
+
 
 cursorPreservation = (delta, cursor) ->
 	cursor.start = getCursorFromDelta(delta, cursor.start)
@@ -812,6 +811,17 @@ updateIncludes = (dom, node) ->
 				makeStateReactive(includer.codekey, dom)
 
 
+getHighlights = (tokens) ->
+	ranges = []
+	currPos = 0
+	for t, index in tokens
+		fontstyle = fontColors[t.type]
+		if t.type == 'paren.lparen' and index < tokens.length - 1 and tokens[index + 1].type == 'variable.parameter'
+			fontstyle = fontColors['variable.parameter']
+		ranges.push(   { start: currPos , end: currPos + t.value.length, style: fontstyle }   )
+		currPos += t.value.length
+
+	return ranges
 
 #The canvas dom element that will render the text editor
 dom.CANVASEDITOR = ->
@@ -822,12 +832,23 @@ dom.CANVASEDITOR = ->
 	if not dom.root
 		dom.root = new R({zorder: true, width: @props.width, height: @props.height})
 		textarea = new R({width: '100%', paddingTop: 5, height: @props.height, id: "#{@props.id}", editable: true, codekey: "#{@props.id}"})	
-		linenums = new R({width: 40, zIndex: 1, paddingLeft: 10, backgroundColor: 'rgba(25, 27, 22, 1)', paddingTop: 5, height: @props.height, id: 'linenums', fontColor: '#aaa'})
+		linenums = new R({width: 40, zIndex: 1, paddingLeft: 10, backgroundColor: 'rgba(25, 27, 22, 1)', paddingTop: 5, height: @props.height, id: 'linenums', fontColor: 'gray'})
 		linenums.children.push(new STR('1'));
 		linenums.children.push(new STR('\n'));
 
+		require ["/scripts/tokenizer.js", "/scripts/coffee_highlight_rules.js"], (tokenizer, crules) -> 
+			textarea.tokenizer = new tokenizer.Tokenizer((new crules.CoffeeHighlightRules).getRules())
+			tokens = textarea.tokenizer.getLineTokens(toReadableString(textarea.children))
+			textarea.highlights = getHighlights(tokens.tokens)
+			renderAll(dom)
+
 		textarea.onChange = (e) ->
+			
 			compare(e.node.codekey, e.node, dom)
+			if e.node.tokenizer != undefined
+				tokens = e.node.tokenizer.getLineTokens(toReadableString(e.node.children))
+				e.node.highlights = getHighlights(tokens.tokens)
+
 			linenums.children = []
 			for c in textarea.children
 				if c.str == '\n'
@@ -843,9 +864,9 @@ dom.CANVASEDITOR = ->
 		textarea.onOldSchoolScroll = (el) ->
 			linenums.scrollTop = el.scrollTop
 			if el.scrollLeft > 0
-				linenums.shadow = true;
+				linenums.shadow = true
 			else
-				linenums.shadow = false;
+				linenums.shadow = false
 
 		textarea.onCursorChanged = (el) ->
 			compare(el.codekey, el, dom)
@@ -1051,6 +1072,19 @@ createHiDPICanvas = (w, h, ratio, id) ->
 </script>
 <script type = 'statebus' id='main'>
 
+window.getLastItemInPath = ->
+	subs = document.location.toString().split('/')
+	lastItem = subs[subs.length - 1].split("?")[0]
+	return lastItem
+
+
+codeUrl = 'diffsync/' + getLastItemInPath()
+if not codeUrl
+	codeUrl = 'diffsync/welcome'
+
+
+#If we visit /emo/blah, then let's load code at the key 'diffsync/blah'
+include(codeUrl)
 
 
 #If the user doesn't write a dom.CONTENT element, we'll just render nothing.
@@ -1060,7 +1094,7 @@ dom.CONTENT = ->
 
 #Here's the main page that hosts the editor and the resulting html.
 dom.BODY = ->
-	
+
 
 	#whenever the user writes some code, we save to 'include' so the UI will re-render
 	includestate = fetch('include')
@@ -1159,8 +1193,11 @@ dom.INCLUDE = ->
 
 
 <script>
-  //statebus_server = 'http://cheeseburgertherapy.com:3000'
-  statebus_server = 'http://localhost:3000'
+  statebus_server = 'http://cheeseburgertherapy.com:3000'
+  //statebus_server = 'http://localhost:3000'
 </script>
-<script src="/mo-statebus-client.js"></script>
-<style type ='text/css'>
+
+
+<script src="/scripts/mo-statebus-client.js"></script>
+
+<script src="/scripts/require.js"></script>

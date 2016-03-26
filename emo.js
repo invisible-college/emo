@@ -130,6 +130,7 @@ app.get('/scripts/:subdir?/:filename',
 
     }
 );
+
 app.get('/lib/:filename',          
     function(req, res){ 
         var filename = req.params.filename;
@@ -139,6 +140,7 @@ app.get('/lib/:filename',
 
     }
 );
+
 
 
 bus.diffPatcher = new jsondiffpatch.create({textDiff : {minLength : 1}});
@@ -180,7 +182,13 @@ function forgetClientForDiffSync(clientid, diffsynckey){
 }
 
 
-
+function fetch_once(key, callback) {
+   fetch(key, wrapper)
+   function wrapper (obj) {
+      callback(obj)
+      bus.forget(key, wrapper)
+   }
+}
 
 // we want to create a bus for each client
 // this will let us do collaborative edits
@@ -195,30 +203,17 @@ function userbusfunk (clientbus, conn){
 
             rememberClientForDiffSync(conn.id, clientbus, strippedKey);
 
-            setTimeout(
-                function(){
-                    
-                    // The main doc of what is edited.
-                    var shared = bus.fetch('/' + strippedKey);
+            
+            //Fetching the whole doc and then pubbing it to the client.
+            function pubWholeDoc(shared){
+                if(shared.doc == undefined){
+                    shared.doc = {key : strippedKey};
+                } 
+                clientbus.pub({key : key, doc: shared.doc});
+            }
 
-                    //The shadow copy for the current client
-                    var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
-                    var shadow = bus.fetch(shadowkey);
-                    
+            fetch_once('/' + strippedKey, pubWholeDoc);
 
-
-                    if(shared.doc == undefined){
-                        shared.doc = {key : strippedKey};
-                    }
-
-                    shadow.doc = clone(shared.doc);
-
-                    // these cause infinite loops when using save.
-                    // I think statebus is stripping client ids out of keys.
-                    bus.cache[shadow.key] = shadow;
-                    clientbus.pub({key : key, doc: shared.doc});
-                },
-            0);
        }else{
             return bus.fetch(key)
         }
@@ -249,41 +244,36 @@ function userbusfunk (clientbus, conn){
     clientbus('*').on_save = function(obj){
         if(!obj.key.startsWith('/clientdiff/')){
             bus.save(obj)
+        }else{
+            var strippedKey = obj.key.substring('/clientdiff/'.length);
+            if(!clientbuses[strippedKey] || !clientbuses[strippedKey][conn.id])
+                return;
+            saveIncomingEdits(obj);
         }
     }
-
-    clientbus('/clientdiff/*').on_save = function(obj){
-        var strippedKey = obj.key.substring('/clientdiff/'.length);
-        if(!clientbuses[strippedKey] || !clientbuses[strippedKey][conn.id])
-            return;
-        saveIncomingEdits(obj);
-    }
-
 
 
     function saveIncomingEdits(message){
         
+
         var strippedKey = message.key.substring('/clientdiff/'.length);
 
         // The main doc that is what is edited.
         var shared = bus.fetch('/' + strippedKey);
 
-        var shadowkey = 'shadow/' + conn.id + '/' + strippedKey;
-
         //The shadow copy for the current client
-        var shadow = bus.fetch(shadowkey);
+        var shadow = bus.fetch('shadow/' + conn.id + '/' + strippedKey);
 
-
-        //Initialize any of these if they don't exist
-        if(shadow.doc === undefined){
-            shadow.doc = {key : strippedKey};
-        }
 
         if(shared.doc === undefined){
             shared.doc = {key : strippedKey};
             bus.save(shared)
         }
 
+        //Initialize any of these if they don't exist
+        if(shadow.doc === undefined){
+            shadow.doc = clone(shared.doc)
+        }
 
         //If the client sent an older version, we can ignore it.
         if(message.diff){
@@ -293,12 +283,14 @@ function userbusfunk (clientbus, conn){
         }
         
         
-        bus.cache[shadow.key] = shadow;
+        bus.save(shadow);
         
         saveOutgoingEdits(conn.id, strippedKey);
     }
 
 
+
+    var editcounter = {};
     //Let's compare a shadow for a client with our current version
     //Returns an  object that contains the server text version
     //along with a stack of edits that the client should apply.
@@ -320,6 +312,12 @@ function userbusfunk (clientbus, conn){
         //Return the edits
         var clientbus = clientbuses[strippedKey][clientid];
         var message = {key: '/serverdiff/' + strippedKey}
+        
+        if(editcounter[shadow.key] === undefined)
+            editcounter[shadow.key] = 0
+        
+        message.counter = editcounter[shadow.key];
+        editcounter[shadow.key]++;
 
         if(diff){
 
@@ -330,11 +328,12 @@ function userbusfunk (clientbus, conn){
             shadow.doc = clone(shared.doc);
 
             //Save everything
-            bus.cache[shadow.key] = shadow;
+            bus.save(shadow);
 
         }
 
-        clientbus.pub(message)
+        clientbus.pub(message);
+
     }  
 
 }

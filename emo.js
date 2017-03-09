@@ -28,7 +28,7 @@ else {
     var server = http.createServer(app)
 }
 
-server = server.listen(3000, function () {
+server = server.listen(4000, function () {
     var host = server.address().address
     var port = server.address().port
     console.log('Listening at https://%s:%s', host, port)

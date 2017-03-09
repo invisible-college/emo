@@ -203,7 +203,7 @@ function userbusfunk (clientbus, conn){
 
             rememberClientForDiffSync(conn.id, clientbus, strippedKey);
 
-            
+
             //Fetching the whole doc and then pubbing it to the client.
             function pubWholeDoc(shared){
                 if(shared.doc == undefined){
@@ -238,6 +238,8 @@ function userbusfunk (clientbus, conn){
                 save(cursors);
             }
         }
+        else
+            bus.forget(key);
     }
 
 

@@ -772,7 +772,7 @@ function saveIncomingEdits(message){
     }
 
     shared = clone(shared);
-    delete shared.key;
+    delete shared.key; //potential bug - we should be escaping all keys recursively
 
     function updateShadow(shadow){
         //Initialize the shadow if it hasn't been yet.
@@ -789,8 +789,9 @@ function saveIncomingEdits(message){
         }
 
         else if(message.diff){
-            shadow.doc = bus.diffPatcher.patch(shadow.doc, message.diff)
-            shared = bus.diffPatcher.patch(shared, message.diff)
+            shadow.doc = bus.diffPatcher.patch(shadow.doc, message.diff) //exact
+            shared = bus.diffPatcher.patch(shared, message.diff) //fuzzy
+
             shared.key = key;
             save(shared);
         }       

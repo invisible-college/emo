@@ -1,6 +1,137 @@
 
 <script type = "statebus"> # -*- mode: coffee -*-
 
+
+`
+/* jshint browser: true */
+
+// The properties that we copy into a mirrored div.
+// Note that some browsers, such as Firefox,
+// do not concatenate properties, i.e. padding-top, bottom etc. -> padding,
+// so we have to do every single property specifically.
+var properties = [
+  'direction',  // RTL support
+  'boxSizing',
+  'width',  // on Chrome and IE, exclude the scrollbar, so the mirror div wraps exactly as the textarea does
+  'height',
+  'overflowX',
+  'overflowY',  // copy the scrollbar for IE
+
+  'borderTopWidth',
+  'borderRightWidth',
+  'borderBottomWidth',
+  'borderLeftWidth',
+  'borderStyle',
+
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+
+  // https://developer.mozilla.org/en-US/docs/Web/CSS/font
+  'fontStyle',
+  'fontVariant',
+  'fontWeight',
+  'fontStretch',
+  'fontSize',
+  'fontSizeAdjust',
+  'lineHeight',
+  'fontFamily',
+
+  'textAlign',
+  'textTransform',
+  'textIndent',
+  'textDecoration',  // might not make a difference, but better be safe
+
+  'letterSpacing',
+  'wordSpacing',
+
+  'tabSize',
+  'MozTabSize'
+
+];
+
+var isBrowser = (typeof window !== 'undefined');
+var isFirefox = (isBrowser && window.mozInnerScreenX != null);
+
+function getCaretCoordinates(element, position, options) {
+  if(!isBrowser) {
+    throw new Error('textarea-caret-position#getCaretCoordinates should only be called in a browser');
+  }
+
+  var debug = options && options.debug || false;
+  if (debug) {
+    var el = document.querySelector('#input-textarea-caret-position-mirror-div');
+    if ( el ) { el.parentNode.removeChild(el); }
+  }
+
+  // mirrored div
+  var div = document.createElement('div');
+  div.id = 'input-textarea-caret-position-mirror-div';
+  document.body.appendChild(div);
+
+  var style = div.style;
+  var computed = window.getComputedStyle? getComputedStyle(element) : element.currentStyle;  // currentStyle for IE < 9
+
+  // default textarea styles
+  style.whiteSpace = 'pre-wrap';
+  if (element.nodeName !== 'INPUT')
+    style.wordWrap = 'break-word';  // only for textarea-s
+
+  // position off-screen
+  style.position = 'absolute';  // required to return coordinates properly
+  if (!debug)
+    style.visibility = 'hidden';  // not 'display: none' because we want rendering
+
+  // transfer the element's properties to the div
+  properties.forEach(function (prop) {
+    style[prop] = computed[prop];
+  });
+
+  if (isFirefox) {
+    // Firefox lies about the overflow property for textareas: https://bugzilla.mozilla.org/show_bug.cgi?id=984275
+    if (element.scrollHeight > parseInt(computed.height))
+      style.overflowY = 'scroll';
+  } else {
+    style.overflow = 'hidden';  // for Chrome to not render a scrollbar; IE keeps overflowY = 'scroll'
+  }
+
+  div.textContent = element.value.substring(0, position);
+  // the second special handling for input type="text" vs textarea: spaces need to be replaced with non-breaking spaces - http://stackoverflow.com/a/13402035/1269037
+  if (element.nodeName === 'INPUT')
+    div.textContent = div.textContent.replace(/\s/g, '\u00a0');
+
+  var span = document.createElement('span');
+  // Wrapping must be replicated *exactly*, including when a long word gets
+  // onto the next line, with whitespace at the end of the line before (#7).
+  // The  *only* reliable way to do that is to copy the *entire* rest of the
+  // textarea's content into the <span> created at the caret position.
+  // for inputs, just '.' would be enough, but why bother?
+  span.textContent = element.value.substring(position) || '.';  // || because a completely empty faux span doesn't render at all
+  div.appendChild(span);
+
+  var coordinates = {
+    top: span.offsetTop + parseInt(computed['borderTopWidth']),
+    left: span.offsetLeft + parseInt(computed['borderLeftWidth'])
+  };
+
+  if (debug) {
+    span.style.backgroundColor = '#aaa';
+  } else {
+    document.body.removeChild(div);
+  }
+
+  return coordinates;
+}
+
+if (typeof module != 'undefined' && typeof module.exports != 'undefined') {
+  module.exports = getCaretCoordinates;
+} else if(isBrowser){
+  window.getCaretCoordinates = getCaretCoordinates;
+}
+`
+
+
 window.option = (name) ->
     name = name.replace(/[\[]/, "\\[").replace(/[\]]/, "\\]")
     regex = new RegExp("[\\?&]" + name + "=([^&#]*)")
@@ -21,416 +152,153 @@ if not codeUrl
 	codeUrl = 'diffsync/welcome'
 
 
-LEFT = 37
-RIGHT = 39
-DOWN = 40
-UP = 38
-TAB = 9
-BACKSPACE = 8
-class RawDOMEditor
-	constructor: (id, me, defaultText) ->
-		@id = id
-		@domnode = document.getElementById(id)
-		@domnode.addEventListener 'keypress' , @onKeyPress
-		@domnode.addEventListener 'keydown' , @onKeyDown
-		@cursors = {}
-		@serverCursors = {}
-		@me = me
-		@serverCursors[@me] = {start: 0, end: 0, atStart: true}
-		@cursors[@me] = clone(@serverCursors)
-
-		@loadFromString(defaultText)
-		@cursorDomEl = createCursor(id + '_' + me)
-		
-
-	loadFromString: (text) ->
-		if text == undefined then text = ''
-		while @domnode.firstChild
-			@domnode.removeChild(@domnode.firstChild)
-
-		for s in text
-			@domnode.appendChild(@createTextNode(s, @))
-
-	textMouseDown: (e) ->
-		caretpos = 0
-		node = e.node
-		@mousedown = true
-		while node = node.previousSibling
-			if node != @cursorDomEl
-				caretpos++
-
-		@setSelection(caretpos, caretpos, true)
-		@save()
-
-	textMouseUp: (e) ->
-		@mousedown = false
-
-	cursor: -> @cursors[@me]
-
-	textMouseMove: (e) ->
-		if @mousedown
-			caretpos = 0
-			node = e.node
-			while node = node.previousSibling
-				if node != @cursorDomEl
-					caretpos++
-			othersel = caretpos
-			if @cursors[@me].atStart
-				othersel = @cursors[@me].end
-			else
-				othersel = @cursors[@me].start
-
-			if othersel < caretpos
-				tmp = othersel
-				othersel = caretpos
-				caretpos = tmp
-				atstart = true
-			else
-				atstart = false
-
-			@setSelection(caretpos, othersel,  atstart)	
-			@save()
-
-	onKeyPress: (e) => 
-
-		str = String.fromCharCode(e.which)
-
-		@insertStr(str)
-		@setSelection(@cursor().start + 1, @cursor().start + 1, true)
-		@save()
-
-
-	onKeyDown: (e) =>
-		char = String.fromCharCode(e.keyCode)
-		if e.keyCode == TAB
-			e.preventDefault()
-			@insertStr('\t')
-			@setSelection(@cursor().start + 1, @cursor().start + 1, true)
-			
-			
-		if e.keyCode == BACKSPACE
-			e.preventDefault()
-			if @cursor().start == @cursor().end
-				@deleteChildren(@cursor().start - 1 , 1)
-				@setSelection(@cursor().start - 1 , @cursor().start - 1, true)
-				
-				
-			else
-				@deleteChildren(@cursor().start, @cursor().end - @cursor().start)
-				@setSelection(@cursor().start, @cursor().start, true)
-				
-				
-
-		else if e.keyCode == LEFT
-			start = @cursor().start
-			end = @cursor().end
-			start--
-			if not e.shiftKey then end = start
-			e.preventDefault()
-			@setSelection(start, end, true)
-			@save()
-			
-			
-
-		else if e.keyCode == RIGHT
-			down = @cursor().start
-			up = @cursor().end
-			up++
-			if not e.shiftKey then down = up
-			@setSelection(down, up, true)
-			e.preventDefault()
-			@save()
-			
-			
-
-		else if e.keyCode == DOWN
-			down = @cursor().down
-			up = @cursor().up
-			thislinestart = getThisLineStart(node, up)
-			relative = up - thislinestart
-			nextlinestart = getNextLineStart(node, up)
-			linelength = getLineLength(node, nextlinestart)
-			if relative > linelength
-				relative = linelength - 1
-			up = nextlinestart + relative
-			if not e.shiftKey then down = up
-			@setSelection(down, up, true)
-			e.preventDefault()
-			@save()
-			
-
-		else if e.keyCode == UP #up
-			down = @cursor().down
-			up = @cursor().up
-			thislinestart = getThisLineStart(node, up)
-			relative = up - thislinestart
-			prevlinestart = getPreviousLineStart(node, up)
-			linelength = getLineLength(node, prevlinestart)
-			if relative > linelength
-				relative = linelength - 1
-			up = prevlinestart + relative
-			if not e.shiftKey then down = up
-			@setSelection(down, up, true)
-			e.preventDefault()
-			@save()
-			
-
-		else if e.ctrlKey
-			if char == 'A'
-				up = getThisLineStart(node, @cursor().up)
-				down = @cursor().down
-				if not e.shiftKey then down = up
-				@setSelection(down, up, true)
-				
-			
-			else if char == 'E'
-				up = getNextLineStart(node, @cursor().up) - 1
-				down = @cursor().down
-				if not e.shiftKey then down = up
-				@setSelection(down, up, false)
-				
-				
-			else if char == 'V'
-				i = 0
-				up = @cursor().up
-				while i < 10
-					if e.shiftKey
-						up = getPreviousLineStart(node, up)
-					else
-						up = getNextLineStart(node, up)
-					i++
-				if not e.shiftKey then down = up
-				@setSelection(down, up, false)
-				
-
-		else if e.metaKey
-			if char == 'A'
-				up = 0
-				down = @children.length
-				@setSelection(down, up, false)
-				e.preventDefault()
-				
-				
-
-			else if char == 'C'
-				clipboard = fetch('clipboard')
-				clipboard.plain = toReadableString(@children, @cursor().start, @cursor().end - @cursor().start)
-				save(clipboard)
-
-
-	insertStr: (str) ->
-		strnode = @createTextNode(str)
-		start = @cursor().start
-		if start < @domnode.childNodes.length - 1
-			@domnode.insertBefore(strnode, @domnode.childNodes[start])
-		else
-			@domnode.appendChild(strnode)
-
-	deleteChildren: (index, howmany) ->
-		@cursorDomEl.parentNode.removeChild(@cursorDomEl)
-
-		toremove = []
-		toremove.push @domnode.childNodes[i] for i in [index..index + howmany - 1]
-		@domnode.removeChild child for child in toremove
-		@save()
-
-	createTextNode: (text) ->
-		span = document.createElement('span')
-		if text == '\n' or text == '\r'
-			tn = document.createElement('br')
-		else	
-			tn = document.createTextNode(text)
-		span.addEventListener 'mousemove' , (e) => e.node = span; @textMouseMove(e)
-		span.addEventListener 'mousedown' , (e) => e.node = span; @textMouseDown(e)
-		span.addEventListener 'mouseup'   , (e) => e.node = span; @textMouseUp(e)
-		span.appendChild(tn)
-		return span
-
-
-	setSelection: (start, end, caretAtStart) ->
-		@cursors[@me] = {start: start, end: end, atStart: caretAtStart}
-		if @cursorDomEl.parentNode
-			@cursorDomEl.parentNode.removeChild(@cursorDomEl)
-
-		if start < @domnode.childNodes.length
-			@domnode.insertBefore(@cursorDomEl, @domnode.childNodes[start])
-		else
-			@domnode.appendChild(@cursorDomEl)
-
-	toString: ->
-		str = ''
-		for c in @domnode.childNodes
-			
-			if c.childNodes and c.childNodes[0] and c.childNodes[0].tagName == 'BR'
-				str += '\n'
-			else
-				str += c.textContent
-
-
-		return str
-
-	updateDom: (delta) ->
-		if @cursorDomEl.parentNode
-			@domnode.removeChild(@cursorDomEl)
-
-		lines = delta[0].split('\n')
-		start = 0
-		digits = /-(\d+)(,(\d+))? \+(\d+)(,(\d+))?/g
-		for l in lines
-			l = decodeURIComponent(l)
-			if l.startsWith('@@') and l.endsWith('@@')
-				match = digits.exec(l)
-				start = parseInt(match[1]) - 1
-			else if l.startsWith('+')
-
-				str = l.substring(1)
-				for s in str
-					tn = @createTextNode(s)
-					if @domnode.childNodes[start]
-						@domnode.insertBefore(tn, @domnode.childNodes[start])
-					else
-						@domnode.appendChild(tn)
-					start++
-
-			else if l.startsWith('-')
-				str = l.substring(1)
-				for s in str
-					@domnode.removeChild(@domnode.childNodes[start])
-				
-			else if l.startsWith(' ')
-				start += l.length - 1
-
-		@setSelection(@cursors[@me].start, @cursors[@me].end, @cursors[@me].atStart)
-
-
-	updateCursors: (cursordiff) ->
-		sharedstate = fetch(@id)
-		if Object.keys(cursordiff).length > 1 or cursordiff[@me] == undefined
-
-			for c of cursordiff
-				if c != @me #never overwrite our own cursor
-					if sharedstate.cursors[c]
-						@serverCursors[c] = clone(sharedstate.cursors[c])
-						@cursors[c] = clone(sharedstate.cursors[c])
-					else
-						delete @serverCursors[c]
-						delete @cursors[c]
-
-		#If our own cursor was deleted cuz someone logged off (logoffs clear all cursors)
-		#Then rebroadcast ours.
-		if sharedstate.cursors[@me] == undefined
-			nodecursor = @cursors[@me]
-			@cursors[@me] = nodecursor
-			@serverCursors[@me] = clone(nodecursor)
-			sharedstate.cursors[@me] = clone(nodecursor)
-			save(sharedstate)
-
-	save: ->
-		state = clone(fetch(@id))
-		if state.text == undefined
-			state.text = ''
-
-		editortext = @toString()
-		delta = bus.diffPatcher.diff(state.text, editortext)
-		if delta
-			
-			state.text = editortext	
-			
-			#predict where people's cursors will go.
-			for c of @cursors
-				if c != @me
-					cursorPreservation(delta, @cursors[c])
-		
-		if not state.cursors then state.cursors = {}
-		cursordelta = bus.diffPatcher.diff(state.cursors, @serverCursors)
-		if cursordelta
-			state.cursors[@me] = clone(@cursors[@me])
-			@serverCursors[@me] = clone(@cursors[@me])
-
-		
-		if delta or cursordelta then save(state)
-
-
 dom.BODY = ->
 	DIV null,
 		EDITOR
 			id: "#{codeUrl}"
+
+
+hashCode = (str) ->
+	hash = 0
+	i = 0
+	if str.length == 0 then return hash
+	for c in str
+		c = str.charCodeAt(c)
+		hash  = ((hash << 5) - hash) + c
+		hash |= 0
+
+	return hash >>> 0
+
+
+
+dom.EDITOR = ->
+	cursorColors = ['#FF1493', '#00FFFF', '#FF7F50', '#7FFF00']
+
+	conn = fetch('/connection')
+	if conn.mine and not conn.mine.id
+		conn.mine.id = create_id()
+		conn.mine.color = cursorColors[hashCode(conn.mine.id) % cursorColors.length]
+		save(conn)
+
+	sharedstate = fetch(@props.id)
+	allcons = fetch('/connections')
+	id = 'collabedit' + @props.id
+	
+	DIV
+		style: 
+			position: 'relative'
 			width: 300
 			height: 300
+			overflow: 'scroll'
+		
+		id: id
+		if allcons.all
+			for c in allcons.all
+				do (c) =>
+					if c.id != conn.mine.id
+						el = document.getElementById(id)
+						if el
+							textdiv = document.getElementById(@props.id)
+							r = textdiv.getBoundingClientRect()
+							console.log(r)
+
+							
+							caretxy = window.getCaretCoordinates(textdiv, c.caretStart, c.caretEnd)
+							console.log(textdiv.getBoundingClientRect().bottom - (caretxy.top))
+							if r
+								DIV
+									style:
+										width: 2
+										height: 16
+										backgroundColor: c.color
+										position: 'absolute'
+										top: caretxy.top - textdiv.scrollTop
+										left: caretxy.left - textdiv.scrollLeft
+										display: if caretxy.top - textdiv.scrollTop + 15 > r.bottom or caretxy.left - textdiv.scrollLeft + 1 > r.right  then 'none'
+									tabIndex: -1
+		TEXTAREA
+			id: @props.id
+			tabIndex: 1
+			value: sharedstate.text
+			onChange: (e) =>
+				sharedstate.text = e.target.value
+				conn.mine.caretStart = e.target.selectionStart
+				conn.mine.caretEnd = e.target.selectionEnd
+				save(conn)
+				save(sharedstate)
+			onSelect: (e) =>
+				conn.mine.caretStart = e.target.selectionStart
+				conn.mine.caretEnd = e.target.selectionEnd
+				save(conn)
 
 
-#The dom element that will render the text editor
-editors = {}
-dom.EDITOR = ->
-	sharedstate = fetch(@props.id)
-	if document.getElementById(@props.id)
+convertFromHTML = (html) ->
+	# return html
+	# console.log(html)
+	return html.replace('<div>', '<br>').replace('</div>', '')
 
-		if not sharedstate.text then sharedstate.text = 'helliosha'
-		if not editors[@props.id]
-			editors[@props.id] = new RawDOMEditor(@props.id, create_id(), 'shello')
+convertToHTML = (text) ->
+	return text
+	# if text
+	# 	return text.replace('\n', '<br>')
+	# else
+	# 	return text
 
-		editor = editors[@props.id]
-		editortext = editor.toString()
-		diff = bus.diffPatcher.diff(editortext, sharedstate.text)
-
-		if diff then editor.updateDom(diff)
-
-		if not sharedstate.cursors then sharedstate.cursors = {}
-		#If any cursors were explicitly changed, override our cursor preservations
-		cursordiff = bus.diffPatcher.diff(editor.serverCursors, sharedstate.cursors)
-		if cursordiff then editor.updateCursors(cursordiff)
-
-	#we are going to manually manipulate an element with this id.
-	DIV null,
-		id: @props.id
-		tabIndex: 1
+getCaretRange = -> 
+	sel = window.getSelection()
+	currRange = sel.getRangeAt(0)
+	return currRange
 
 
+	# if currRange.collapsed
+	# 	start = currRange.startOffset
+	# 	end = currRange.startOffset + 1
+	# 	adjust = false
+	# 	if end > currRange.startContainer.length
+	# 		adjust = true
+	# 		start -= 1
+	# 		end -= 1
+
+	# 	range = document.createRange()
+	# 	range.setStart(currRange.startContainer, start)
+	# 	range.setEnd(currRange.endContainer, end)
+	# 	sel.removeAllRanges()
+	# 	sel.addRange(range)
+	# 	rect = range.getBoundingClientRect()
+	# 	sel.removeAllRanges()
+	# 	sel.addRange(currRange)
+	# 	if adjust
+	# 		console.log(rect.width)
+	# 		rect = {left: rect.left + rect.width, top: rect.top, width: 0, height: 0}
+
+	# return rect
 
 
 
-createCursor = (id) ->
-	cursor = document.createElement('div')
-	cursor.id = id
-	cursor.style.width  = -2
-	cursor.style.marginLeft = -1
-	cursor.style.marginRight = -1
-	cursor.style.height = 12
-	cursor.style.border = '1px solid red'
-	cursor.style.display =  'inline-block'
-	return cursor
-
+getCaretCoordsFromIndex = (textarea, indexStart, indexEnd) ->
 	
-cursorPreservation = (delta, cursor) ->
-	cursor.start = getCursorFromDelta(delta, cursor.start)
-	cursor.end = getCursorFromDelta(delta, cursor.end)
+	selection = window.getSelection()
+	if selection.rangeCount > 0
+		range = document.createRange()
+		currRange = selection.getRangeAt(0)
+		adjust = false
+		if currRange.startContainer.length > 0
+			if indexEnd > currRange.startContainer.length
+				adjust = true
+				indexStart -= 1
+				indexEnd -= 1
 
-getCursorFromDelta = (delta, cursorPos) ->
-	originalCursorPos = cursorPos + 1
-	lines = delta[0].split('\n')
-	start = 0
-	digits = /-(\d+)(,(\d+))? \+(\d+)(,(\d+))?/g
-	for l in lines
-		l = decodeURIComponent(l)
-		if l.startsWith('@@') and l.endsWith('@@')
-			match = digits.exec(l)
-			start = parseInt(match[1]) - 1
-		else if l.startsWith('+') and start <= originalCursorPos
-			cursorPos += l.length - 1
-		else if l.startsWith('-') and start + l.length - 1 <= originalCursorPos
-			start += l.length - 1
-			cursorPos -= l.length - 1
-		else if l.startsWith(' ')
-			start += l.length - 1
-		else if l.startsWith('-') and start <= originalCursorPos
-			cursorPos = start
+			range.setStart(textarea.childNodes[0], indexStart)
+			range.setEnd(textarea.childNodes[0], indexEnd + 1)
 
-	return cursorPos
+			selection.removeAllRanges()
+			selection.addRange(range)
+			rect = range.getBoundingClientRect()
+			selection.removeAllRanges()
+			selection.addRange(currRange)
 
-
-
-
-
+			return rect
+	return {left: 0, top: 0}
 
 
 </script>
@@ -438,7 +306,8 @@ getCursorFromDelta = (delta, cursorPos) ->
 
 <script>
   //statebus_server = 'http://cheeseburgertherapy.com:3000'
-  statebus_server = 'http://localhost:3000'
+  //statebus_server = 'http://localhost:4000'
+  statebus_server = 'http://66.175.217.72:4000/'
 </script>
 <script src="/scripts/mo-statebus-client.js"></script>
 <style type ='text/css'>

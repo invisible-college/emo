@@ -114,6 +114,7 @@ if (!String.prototype.endsWith) {
 
 app.get('/',                           send_file('emo.html'))
 app.get('/emo/:codeUrl',               send_file('emo.html') )
+    app.get('/demos',                       send_file('sbdemos.html'))
 app.get('/jsondiffpatch.js',           send_file('jsondiffpatch.js'))
 app.get('/google_diff_match_patch.js', send_file('google_diff_match_patch.js'))
 app.get('/textwidget/:codeUrl',        send_file('textwidget.html'))
@@ -196,7 +197,7 @@ function fetch_once(key, callback) {
 function userbusfunk (clientbus, conn){
     // clientbus.serves_auth(conn, bus)
 
-    clientbus('*').on_fetch = function (key){
+    clientbus('/serverdiff/*').on_fetch = function (key){
 
         if(key.startsWith('/serverdiff/')){
             var strippedKey = key.substring('/serverdiff/'.length)

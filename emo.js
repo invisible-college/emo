@@ -36,7 +36,7 @@ server = server.listen(4000, function () {
 })
 
 var https = require('https')
-// var options = {  host: 'npmcdn.com', path: '/three@0.74.0'}
+// var options = {  host: 'unpkg.com', path: '/three@0.74.0'}
 // var callback = function(response) {
 //   var str = '';
 
